@@ -141,6 +141,7 @@ pub enum LoreResponse {
     Connect(responses::ConnectResponse),
     Copy(responses::CopyResponse),
     Get(responses::GetResponse),
+    GetResolved(responses::GetResolvedResponse),
     Put(responses::PutResponse),
     Query(responses::QueryResponse),
     Ping(responses::PingResponse),

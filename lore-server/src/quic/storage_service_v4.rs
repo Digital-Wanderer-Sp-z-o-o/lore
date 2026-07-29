@@ -317,6 +317,22 @@ impl QuicService for StorageServiceV4 {
                         )
                         .await
                     }
+                    // Needs BOTH stores (resolve the key, then read the blob), which is why
+                    // it is dispatched here rather than through the single-store v0 path.
+                    crate::quic::storage_service::ParsedStorageRequest::GetResolved(resolved) => {
+                        crate::protocol::storage::get_resolved::handle_get_resolved(
+                            resolved.key,
+                            resolved.context,
+                            resolved.key_type,
+                            resolved.flags,
+                            repository,
+                            correlation_id,
+                            user_id,
+                            self.mutable_store.clone(),
+                            self.immutable_store.clone(),
+                        )
+                        .await
+                    }
                     crate::quic::storage_service::ParsedStorageRequest::MutableStoreOp(store) => {
                         handle_mutable_store(
                             store.key,

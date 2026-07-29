@@ -179,6 +179,18 @@ pub(crate) fn build_storage_protocol_request_span(
             { CORRELATION_ID } = correlation_id,
             { USER_ID } = user_id,
         ),
+        Ok(Command::GetResolved) => info_span!(
+            parent: None,
+            "StorageGetResolvedTask",
+            { SAMPLING_TIER_LOW } = true,
+            { TRANSPORT } = %Transport::Quic,
+            { PROTOCOL } = %protocol,
+            { QUIC_OPCODE } = opcode_label,
+            { CONNECTION_ID } = connection_id,
+            { REPOSITORY_ID } = repository_id,
+            { CORRELATION_ID } = correlation_id,
+            { USER_ID } = user_id,
+        ),
         Err(_) => info_span!(
             parent: None,
             "StorageUnknownTask",
@@ -222,6 +234,9 @@ pub enum ParsedStorageRequest {
     /// Wire-identical to `Get`; the dispatcher routes this to `handle_get_metadata` so the
     /// response carries fragment metadata only — no payload bytes.
     GetMetadata(crate::protocol::storage::get::GetMetadata),
+    /// Resolves a mutable key and returns the immutable blob it points at, saving the caller
+    /// the round trip a separate `MutableLoad` would cost. v4-only: it needs both stores.
+    GetResolved(requests::GetResolved),
     Put(requests::Put),
     Query(requests::Query),
     Correlate(requests::Correlate),
@@ -291,6 +306,9 @@ pub fn parse_message_for_opcode(
         )),
         Command::MutableCas => Ok(ParsedStorageRequest::MutableCas(
             requests::MutableCas::parse(bytes)?,
+        )),
+        Command::GetResolved => Ok(ParsedStorageRequest::GetResolved(
+            requests::GetResolved::parse(bytes)?,
         )),
     }
 }

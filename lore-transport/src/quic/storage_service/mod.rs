@@ -31,6 +31,33 @@ pub enum Command {
     /// `Fragment` only — no payload bytes. Used by callers that need fragment metadata for
     /// existence/size lookups without paying for the payload transfer.
     GetMetadata = 11,
+    /// Resolve a mutable key and return the immutable blob it points at, in ONE round trip.
+    ///
+    /// The server loads the mutable key, treats the stored value as an immutable content
+    /// hash, pairs it with the caller-supplied `Context` to form an `Address`, and reads
+    /// that blob — i.e. it performs `mutable_load` + `get` server-side. Callers that would
+    /// otherwise issue those two commands back-to-back (each paying a round trip) save one.
+    ///
+    /// Request:  `Hash` key (32) ++ `Context` (16) ++ `key_type` (1) ++ `flags` (1) = 50 bytes
+    /// Response: resolved `Hash` (32) ++ `Fragment` (16) ++ payload (`size_payload` bytes)
+    ///
+    /// The resolved hash is echoed back so the caller can cache the key->hash mapping and
+    /// still verify the payload against it, rather than trusting the server's resolution.
+    /// Opcodes 4 and 5 are burned (reserved ping/correlate), hence 12.
+    GetResolved = 12,
+}
+
+/// Flags byte of a [`Command::GetResolved`] request.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GetResolvedFlags {
+    /// No optional behaviour.
+    None = 0,
+    /// Reserved: also push every referenced subfragment recursively. NOT IMPLEMENTED — the
+    /// QUIC protocol currently allows exactly one response per `command_id`, so this needs a
+    /// streaming response first. The bit is reserved here so adding it later does not change
+    /// the request layout.
+    AlsoSubfragments = 1,
 }
 
 impl From<Command> for QuicOpCode {
@@ -54,6 +81,7 @@ impl TryFrom<QuicOpCode> for Command {
             v if v == Command::MutableStore as u8 => Ok(Command::MutableStore),
             v if v == Command::MutableCas as u8 => Ok(Command::MutableCas),
             v if v == Command::GetMetadata as u8 => Ok(Command::GetMetadata),
+            v if v == Command::GetResolved as u8 => Ok(Command::GetResolved),
             _ => Err(UnknownCommand(value)),
         }
     }
@@ -77,6 +105,7 @@ pub fn command_name(command: &Command) -> &'static str {
         Command::MutableStore => "mutable_store",
         Command::MutableCas => "mutable_cas",
         Command::GetMetadata => "get_metadata",
+        Command::GetResolved => "get_resolved",
     }
 }
 
