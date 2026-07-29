@@ -28,7 +28,10 @@ use crate::immutable_store::StoreError;
 use crate::options::ReadOptions;
 use crate::store_types::StoreMatch;
 use crate::types::Address;
+use crate::types::Context;
 use crate::types::Fragment;
+use crate::types::Hash;
+use crate::types::KeyType;
 use crate::types::Partition;
 
 fn store_retry() -> crate::Retry {
@@ -370,6 +373,167 @@ pub async fn load_fragment(
                 heal_attempted = true;
             }
         }
+    }
+}
+
+/// Fetch a resolved fragment from a remote session with the same retry semantics as
+/// [`remote_get_retry`]: back off on `SlowDown`, and recover from a stale session id
+/// (a QUIC reconnect resets the server's session map) by invalidating and retrying.
+///
+/// `key` is used only for error context; the caller has no address until the server answers.
+async fn remote_get_resolved_retry(
+    session: &StorageSession,
+    key: Hash,
+    key_type: KeyType,
+    context: Context,
+) -> Result<(Hash, Fragment, Bytes), StorageError> {
+    let _guard = RemoteFetchGuard::new();
+    let mut retry = store_retry();
+    let mut stale_session_retries: u32 = 0;
+    let key_address = Address { hash: key, context };
+    loop {
+        debug_assert!(!key.is_zero(), "Cannot resolve zero key from store");
+        match session.get_resolved(&key, key_type, &context, 0).await {
+            Ok(resolved) => return Ok(resolved),
+            Err(ref e) if e.is_slow_down() => {
+                if !retry.wait().await {
+                    return Err(StorageError::from(SlowDown));
+                }
+            }
+            Err(err) => {
+                let storage_err = crate::error::protocol_error_to_storage(err, key_address);
+                if matches!(storage_err, StorageError::NotConnected(_))
+                    && stale_session_retries < MAX_STALE_SESSION_RETRIES
+                {
+                    stale_session_retries += 1;
+                    session.invalidate().await;
+                    if !retry.wait().await {
+                        return Err(storage_err);
+                    }
+                    continue;
+                }
+                return Err(storage_err);
+            }
+        }
+    }
+}
+
+/// Resolve a mutable key and read the content it points at, in ONE remote round trip.
+///
+/// Equivalent to `mutable_load(key)` followed by [`read`] of the resulting address, but the
+/// server performs the resolution, so the key lookup and the root fragment fetch share a
+/// single request. Returns the hash the key resolved to alongside the content, so callers can
+/// cache the key->hash mapping themselves.
+///
+/// Differences from [`read`], both inherent to saving the round trip:
+/// * There is no local-store probe for the *root* — the caller cannot know the root's address
+///   before the server answers, which is the entire point of the command. Callers that expect
+///   to hit locally should keep using `mutable_load` + [`read`].
+/// * Only the root arrives via `get_resolved`. If it is a fragment list, the leaves are read
+///   through the ordinary [`load_fragment`] path, so they are still served from — and written
+///   back to — the local store as usual.
+///
+/// The root is decompressed and verified against the resolved hash exactly as
+/// [`load_fragment`] does, so a server that resolves a key to the wrong content is still
+/// caught rather than trusted.
+pub async fn read_resolved(
+    store: Arc<dyn ImmutableStore>,
+    partition: Partition,
+    key: Hash,
+    key_type: KeyType,
+    context: Context,
+    range: Option<Range<usize>>,
+    options: ReadOptions,
+    session: Arc<StorageSession>,
+) -> Result<(Hash, Bytes), StorageError> {
+    let options = options.with_decompress();
+
+    let (resolved, mut fragment, buffer) =
+        remote_get_resolved_retry(session.as_ref(), key, key_type, context).await?;
+
+    if resolved.is_zero() {
+        // A zero value means the key was deleted; treat as a miss rather than reading
+        // the zero address.
+        return Err(StorageError::from(crate::errors::AddressNotFound::from(
+            Address { hash: key, context },
+        )));
+    }
+
+    let address = Address {
+        hash: resolved,
+        context,
+    };
+
+    fragment.flags |= FragmentFlags::PayloadStoredDurable;
+    let store_fragment = fragment;
+    let raw_payload = buffer.clone();
+
+    let (fragment, buffer) = decompress_and_verify(fragment, buffer, address, options).await?;
+
+    // Mirror load_fragment's local write-back so a subsequent read of the same root can be
+    // served locally (and so the caller's own mutable_load + read path sees it).
+    let should_store = options.cache
+        || (fragment.flags & FragmentFlags::PayloadLocalCachePriority) != 0;
+    if should_store {
+        let _ = store
+            .clone()
+            .put(partition, address, store_fragment, Some(raw_payload), false)
+            .await;
+    }
+
+    if let Some(max) = options.max_content_size
+        && fragment.size_content > max
+    {
+        return Err(StorageError::from(crate::errors::Oversized {
+            context: format!(
+                "fragment size_content {} exceeds caller-supplied max {max}",
+                fragment.size_content
+            ),
+        }));
+    }
+
+    let range = match range {
+        Some(range) => {
+            min(range.start, fragment.size_content as usize)
+                ..min(range.end, fragment.size_content as usize)
+        }
+        None => 0..fragment.size_content as usize,
+    };
+    if range.is_empty() {
+        return Ok((resolved, Bytes::default()));
+    }
+
+    if (fragment.flags & FragmentFlags::PayloadFragmented) == FragmentFlags::PayloadFragmented {
+        let mut target_buffer = BytesMut::with_capacity(range.len());
+        unsafe {
+            target_buffer.set_len(range.len());
+        }
+        let target_size = target_buffer.len();
+        let target = target_buffer.split();
+        read_defragment(
+            store,
+            partition,
+            address,
+            range,
+            fragment,
+            buffer,
+            target,
+            options,
+            0,
+            Some(session),
+        )
+        .await?;
+        if !target_buffer.try_reclaim(target_size) {
+            return Err(StorageError::internal(
+                "failed to reclaim buffer after defragmenting",
+            ));
+        }
+        unsafe {
+            target_buffer.set_len(target_size);
+        }
+        Ok((resolved, target_buffer.freeze()))
+    } else {
+        Ok((resolved, buffer.slice(range)))
     }
 }
 

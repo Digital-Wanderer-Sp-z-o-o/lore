@@ -116,6 +116,7 @@ pub use read::decompress_and_verify;
 pub use read::load_fragment;
 pub use read::load_raw_local;
 pub use read::read;
+pub use read::read_resolved;
 pub use read::read_into;
 pub use read::read_into_file;
 pub use read::read_raw;

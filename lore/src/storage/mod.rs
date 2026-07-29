@@ -48,6 +48,7 @@ pub mod flush;
 pub mod get;
 pub mod get_file;
 pub mod get_metadata;
+pub mod get_resolved;
 pub mod handle;
 pub mod mutable_compare_and_swap;
 pub mod mutable_list;

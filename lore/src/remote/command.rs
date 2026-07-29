@@ -132,6 +132,7 @@ pub enum LoreCommand {
     StoragePut(crate::storage::put::LoreStoragePutArgs),
     StorageGet(crate::storage::get::LoreStorageGetArgs),
     StorageGetMetadata(crate::storage::get_metadata::LoreStorageGetMetadataArgs),
+    StorageGetResolved(crate::storage::get_resolved::LoreStorageGetResolvedArgs),
     StorageObliterate(crate::storage::obliterate::LoreStorageObliterateArgs),
     StorageCopy(crate::storage::copy::LoreStorageCopyArgs),
     StoragePutFile(crate::storage::put_file::LoreStoragePutFileArgs),
