@@ -59,6 +59,21 @@ jobs:
       # if the repo adopts a stricter supply-chain policy.
       - uses: dtolnay/rust-toolchain@stable
 
+      # `cargo test --workspace` builds a debug test binary per crate with
+      # embedded DWARF, which overflows the hosted runner's small root
+      # filesystem ("No space left on device"). The runners carry a second,
+      # much larger ephemeral volume at /mnt, so build there instead. Set
+      # before rust-cache so the cache acts on this target dir rather than the
+      # now-unused ./target. Linux only: the macOS and Windows runners have no
+      # /mnt volume, and there the in-workspace target dir is used as before.
+      - name: Build on the larger /mnt volume
+        if: runner.os == 'Linux'
+        run: |
+          sudo mkdir -p /mnt/cargo-target
+          sudo chown -R "$(id -u):$(id -g)" /mnt/cargo-target
+          echo "CARGO_TARGET_DIR=/mnt/cargo-target" >> "$GITHUB_ENV"
+          df -h / /mnt
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: unit-${{ matrix.name }}
@@ -82,6 +97,14 @@ jobs:
           persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
+
+      # Build on the larger ephemeral volume — see the note in the unit job.
+      - name: Build on the larger /mnt volume
+        run: |
+          sudo mkdir -p /mnt/cargo-target
+          sudo chown -R "$(id -u):$(id -g)" /mnt/cargo-target
+          echo "CARGO_TARGET_DIR=/mnt/cargo-target" >> "$GITHUB_ENV"
+          df -h / /mnt
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -157,6 +180,24 @@ jobs:
           persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
+
+      # Build on the larger ephemeral volume — see the note in the unit job.
+      # conftest's `release` binary keyword resolves to <cwd>/target/release,
+      # which moving CARGO_TARGET_DIR would leave empty, so point the suite at
+      # the relocated binaries explicitly; LORE_*_EXECUTABLE_PATH takes
+      # precedence over the --lore-*-binary flags below. Skipped on macOS and
+      # Windows, where `release` still resolves in-workspace.
+      - name: Build on the larger /mnt volume
+        if: runner.os == 'Linux'
+        run: |
+          sudo mkdir -p /mnt/cargo-target
+          sudo chown -R "$(id -u):$(id -g)" /mnt/cargo-target
+          {
+            echo "CARGO_TARGET_DIR=/mnt/cargo-target"
+            echo "LORE_EXECUTABLE_PATH=/mnt/cargo-target/release/lore"
+            echo "LORE_SERVER_EXECUTABLE_PATH=/mnt/cargo-target/release/loreserver"
+          } >> "$GITHUB_ENV"
+          df -h / /mnt
 
       - uses: Swatinem/rust-cache@v2
         with:
