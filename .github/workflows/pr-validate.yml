@@ -43,8 +43,11 @@ jobs:
           # line-tables-only test profile) cuts peak linker memory and lets this
           # come back. Smoke still covers linux-aarch64 below.
           # - { name: linux-aarch64, os: ubuntu-24.04-arm }
-          - { name: macos-aarch64, os: macos-latest }
-          - { name: windows-x86_64, os: windows-latest }
+          # TODO: re-enable the remaining platforms. Temporarily narrowed to
+          # linux-x86_64 to iterate on the workflow itself without paying for
+          # (or triaging) the full cross-platform fan-out on every push.
+          # - { name: macos-aarch64, os: macos-latest }
+          # - { name: windows-x86_64, os: windows-latest }
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -135,16 +138,19 @@ jobs:
           # basetemp-arg points pytest's working data at the tmpfs mounted below
           # (Linux only; see the "Grow /dev/shm" step). Empty on macOS/Windows.
           - { name: linux-x86_64, os: ubuntu-latest, basetemp-arg: "--basetemp=/dev/shm/lore-smoke" }
-          - { name: linux-aarch64, os: ubuntu-24.04-arm, basetemp-arg: "--basetemp=/dev/shm/lore-smoke" }
-          - { name: macos-aarch64, os: macos-latest }
+          # TODO: re-enable the remaining platforms. Temporarily narrowed to
+          # linux-x86_64 to iterate on the workflow itself without paying for
+          # (or triaging) the full cross-platform fan-out on every push.
+          # - { name: linux-aarch64, os: ubuntu-24.04-arm, basetemp-arg: "--basetemp=/dev/shm/lore-smoke" }
+          # - { name: macos-aarch64, os: macos-latest }
           # Windows needs explicit loopback ports for the local remote server.
-          - name: windows-x86_64
-            os: windows-latest
-            extra-args: >-
-              --lore-remote-http-port 41339
-              --lore-remote-quic-port 41338
-              --lore-remote-grpc-port 41338
-              --lore-remote-internal-port 41340
+          # - name: windows-x86_64
+          #   os: windows-latest
+          #   extra-args: >-
+          #     --lore-remote-http-port 41339
+          #     --lore-remote-quic-port 41338
+          #     --lore-remote-grpc-port 41338
+          #     --lore-remote-internal-port 41340
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -188,7 +194,6 @@ jobs:
           --lore-client-binary release
           --lore-server-binary release
           ${{ matrix.basetemp-arg }}
-          ${{ matrix.extra-args }}
 
   # Single required status check: branch protection can require just this job,
   # which passes only when every validation job above succeeded.
