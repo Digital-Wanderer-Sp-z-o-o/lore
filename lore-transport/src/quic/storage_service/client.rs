@@ -369,14 +369,26 @@ impl Storage for StorageClient {
         key: &Hash,
         key_type: KeyType,
         context: &Context,
-        flags: u8,
+        flags: u32,
     ) -> Result<(Hash, Fragment, Bytes), ProtocolError> {
+        // key_type (1) ++ flags u24 LE (3) — one 4-byte tail, keeping the request a multiple
+        // of 4. Reject out-of-range flags rather than silently truncating them.
+        if flags > storage_service::get_resolved_flags::MAX {
+            return Err(ProtocolError::internal(format!(
+                "get_resolved: flags {flags:#x} exceeds the {} bits on the wire",
+                storage_service::get_resolved_flags::WIRE_SIZE * 8
+            )));
+        }
+        let mut tail = [0u8; 1 + storage_service::get_resolved_flags::WIRE_SIZE];
+        tail[0] = key_type as u8;
+        tail[1..].copy_from_slice(&flags.to_le_bytes()[..storage_service::get_resolved_flags::WIRE_SIZE]);
+
         let mut payload = send_normal_with_reconnect(self, Command::GetResolved, session_id, || {
             [
                 Bytes::default(),
                 Bytes::from_owner(*key),
                 Bytes::from_owner(*context),
-                Bytes::copy_from_slice(&[key_type as u8, flags]),
+                Bytes::copy_from_slice(&tail),
             ]
         })
         .await?;

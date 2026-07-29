@@ -1,13 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Epic Games, Inc.
 // SPDX-License-Identifier: MIT
-//! `get_resolved`: resolve a mutable key and return the immutable blob it points at, in one
-//! round trip.
-//!
-//! Callers that need "look up this name, then fetch what it points at" would otherwise issue
-//! `mutable_load` followed by `get` and pay two sequential round trips. This command performs
-//! both steps server-side. The resolved hash is echoed back so the caller can cache the
-//! key->hash mapping and still verify the payload against it, rather than trusting the
-//! server's resolution blindly.
+//! `get_resolved`: `mutable_load` + `get` performed server-side, saving the caller one round
+//! trip. The resolved hash is returned so the caller can cache the key->hash mapping and
+//! verify the payload.
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -35,29 +30,31 @@ use crate::protocol::storage::messages::MessageParseError;
 use crate::protocol::storage::messages::Response;
 use crate::util::setup_execution;
 
-/// Bit 0 of the request `flags` byte: also push every referenced subfragment recursively.
-///
-/// NOT IMPLEMENTED. The QUIC protocol permits exactly one response per `command_id`, so this
-/// needs a streaming response first. Parsed and rejected here so that the request layout does
-/// not have to change when it is implemented.
-pub const FLAG_ALSO_SUBFRAGMENTS: u8 = 1;
+/// `flags` bits this build accepts. Reserved; none are defined. Unknown bits are rejected.
+pub const KNOWN_FLAGS: u32 = 0;
 
-/// Wire request: `Hash` key (32) ++ `Context` (16) ++ `key_type` (1) ++ `flags` (1) = 50 bytes.
+/// Wire width of `flags` in bytes. The 4-byte `key_type`/`flags` tail keeps the request a
+/// multiple of 4.
+pub const FLAGS_WIRE_SIZE: usize = 3;
+
+/// Wire request: key `Hash` (32) ++ `Context` (16) ++ `key_type` (1) ++ `flags` u24 LE (3).
 #[derive(Clone, Debug, PartialEq)]
 pub struct GetResolved {
     pub key: Hash,
-    /// Paired with the resolved hash to form the `Address` of the immutable read. The mutable
-    /// store yields only a content hash, so the caller supplies the context.
+    /// Paired with the resolved hash to address the immutable read; the mutable store yields
+    /// only a hash.
     pub context: Context,
     pub key_type: KeyType,
-    pub flags: u8,
+    /// See [`KNOWN_FLAGS`].
+    pub flags: u32,
 }
 
 impl GetResolved {
     pub fn parse(bytes: Bytes) -> Result<Self, MessageParseError> {
         const KEY: usize = size_of::<Hash>();
         const CTX: usize = size_of::<Context>();
-        if bytes.len() < KEY + CTX + 2 {
+        const TAIL: usize = 1 + FLAGS_WIRE_SIZE;
+        if bytes.len() < KEY + CTX + TAIL {
             return Err(MessageParseError::InvalidFieldLength);
         }
 
@@ -65,7 +62,11 @@ impl GetResolved {
         let context = Context::from(&bytes[KEY..KEY + CTX]);
         let key_type = KeyType::try_from(bytes[KEY + CTX])
             .map_err(|_err| MessageParseError::InvalidFieldLength)?;
-        let flags = bytes[KEY + CTX + 1];
+        // u24 LE, zero-extended into the u32 we carry internally.
+        let flags_at = KEY + CTX + 1;
+        let mut flag_bytes = [0u8; size_of::<u32>()];
+        flag_bytes[..FLAGS_WIRE_SIZE].copy_from_slice(&bytes[flags_at..flags_at + FLAGS_WIRE_SIZE]);
+        let flags = u32::from_le_bytes(flag_bytes);
 
         Ok(Self {
             key,
@@ -81,7 +82,7 @@ pub async fn handle_get_resolved(
     key: Hash,
     context: Context,
     key_type: KeyType,
-    flags: u8,
+    flags: u32,
     repository: RepositoryId,
     correlation_id: String,
     user_id: String,
@@ -95,10 +96,11 @@ pub async fn handle_get_resolved(
         key, key_type, repository
     );
 
-    if flags & FLAG_ALSO_SUBFRAGMENTS != 0 {
-        // Reject rather than silently ignore: a caller that asked for the subfragment push
-        // and got only the root would otherwise wait forever for frames that never come.
-        warn!("get_resolved: FLAG_ALSO_SUBFRAGMENTS requested but not implemented");
+    if flags & !KNOWN_FLAGS != 0 {
+        warn!(
+            "get_resolved: unsupported flags {:#x} (known: {:#x})",
+            flags, KNOWN_FLAGS
+        );
         return Err(MessageHandleError::NotImplemented);
     }
 
@@ -142,8 +144,7 @@ pub async fn handle_get_resolved(
                 }
                 Err(StoreError::SlowDown(_)) => Err(MessageHandleError::SlowDown),
                 Err(StoreError::AddressNotFound(_)) => {
-                    // The key resolved but its target is gone — a dangling pointer, not a
-                    // missing key. Both map to NotFound on the wire; the log distinguishes.
+                    // Dangling pointer, not a missing key; both map to NotFound on the wire.
                     info!(
                         "get_resolved: key {} resolved to {} but no fragment was found",
                         key, resolved
@@ -159,14 +160,13 @@ pub async fn handle_get_resolved(
         .await
 }
 
-// This command needs BOTH the mutable and the immutable store. The v0 (`urc/0.2`) message
-// path hands a handler only one store, so it cannot be expressed there; the defaulted trait
-// methods return `NotImplemented`. Real dispatch happens in the v4 path, which has both.
+// Needs both stores; the v0 message path supplies only one, so the defaulted trait methods
+// return `NotImplemented` and dispatch happens in the v4 path.
 impl Message for GetResolved {}
 
 #[derive(Debug, PartialEq)]
 pub struct GetResolvedResponse {
-    /// The hash the mutable key resolved to.
+    /// Hash the key resolved to.
     pub resolved: Hash,
     pub fragment: Fragment,
     pub payload: Bytes,
@@ -190,12 +190,22 @@ mod tests {
     use super::*;
     use crate::store::test_store_create;
 
-    fn request_bytes(key: Hash, context: Context, key_type: KeyType, flags: u8) -> Bytes {
-        let mut bytes = bytes::BytesMut::with_capacity(size_of::<Hash>() + size_of::<Context>() + 2);
+    fn request_bytes(key: Hash, context: Context, key_type: KeyType, flags: u32) -> Bytes {
+        let mut bytes = bytes::BytesMut::with_capacity(
+            size_of::<Hash>() + size_of::<Context>() + 1 + FLAGS_WIRE_SIZE,
+        );
         bytes.extend_from_slice(key.as_bytes());
         bytes.extend_from_slice(context.as_bytes());
-        bytes.extend_from_slice(&[key_type as u8, flags]);
+        bytes.extend_from_slice(&[key_type as u8]);
+        bytes.extend_from_slice(&flags.to_le_bytes()[..FLAGS_WIRE_SIZE]);
         bytes.freeze()
+    }
+
+    #[test]
+    fn test_request_is_four_byte_aligned() {
+        let len = request_bytes(Hash::default(), Context::default(), KeyType::Untyped, 0).len();
+        assert_eq!(len, 52);
+        assert_eq!(len % 4, 0, "request should stay a multiple of 4 bytes");
     }
 
     #[test]
@@ -211,22 +221,24 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_preserves_flags() {
+    fn test_parse_preserves_flags_across_all_24_bits() {
         let key = Hash::hash_buffer(b"test-key");
-        let parsed = GetResolved::parse(request_bytes(
-            key,
-            Context::default(),
-            KeyType::Untyped,
-            FLAG_ALSO_SUBFRAGMENTS,
-        ))
-        .unwrap();
-        assert_eq!(parsed.flags, FLAG_ALSO_SUBFRAGMENTS);
+        // Every bit that fits on the wire must survive the u24 round trip.
+        for flags in [1u32, 0x80, 0xFF_FF, 0x00FF_FFFF] {
+            let parsed =
+                GetResolved::parse(request_bytes(key, Context::default(), KeyType::Untyped, flags))
+                    .unwrap();
+            assert_eq!(parsed.flags, flags, "flags {flags:#x} did not round trip");
+        }
     }
 
     #[test]
     fn test_parse_invalid_length() {
         // One byte short of key + context + key_type + flags.
-        let bytes = Bytes::from(vec![0u8; size_of::<Hash>() + size_of::<Context>() + 1]);
+        let bytes = Bytes::from(vec![
+            0u8;
+            size_of::<Hash>() + size_of::<Context>() + FLAGS_WIRE_SIZE
+        ]);
         assert_eq!(
             GetResolved::parse(bytes),
             Err(MessageParseError::InvalidFieldLength)
@@ -298,7 +310,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_subfragments_flag_rejected() {
+    async fn test_unknown_flag_rejected() {
         let repository = random::<RepositoryId>();
         let (immutable_store, mutable_store, execution) =
             test_store_create().await.expect("Failed to create stores");
@@ -309,7 +321,7 @@ mod tests {
                     Hash::hash_buffer(b"any-key"),
                     Context::default(),
                     KeyType::Untyped,
-                    FLAG_ALSO_SUBFRAGMENTS,
+                    1, // no bits are defined yet, so any bit must be refused
                     repository,
                     String::new(),
                     String::new(),

@@ -165,26 +165,21 @@ pub trait Storage: Send + Sync {
         Err(ProtocolError::internal("unsupported: mutable_load"))
     }
 
-    /// Resolve a mutable key and return the immutable blob it points at, in ONE round trip.
+    /// `mutable_load(key)` followed by `get(Address { hash: resolved, context })`, performed
+    /// server-side in one round trip.
     ///
-    /// Server-side equivalent of `mutable_load(key)` followed by
-    /// `get(Address { hash: resolved, context })`. Callers that would otherwise issue those
-    /// two commands back-to-back — each paying a full round trip — save one.
+    /// `context` is required because the mutable store yields only a hash. `flags` is a
+    /// `get_resolved_flags` bitmask; 0 for default behaviour.
     ///
-    /// `context` is supplied by the caller because the mutable store yields only a content
-    /// hash, and an immutable read needs a full `Address`. `flags` is a bitmask of
-    /// `GetResolvedFlags`; pass 0 for the default behaviour.
-    ///
-    /// Returns `(resolved_hash, fragment, payload)`. The resolved hash is returned so the
-    /// caller can cache the key->hash mapping and verify the payload against it rather than
-    /// trusting the server's resolution blindly.
+    /// Returns `(resolved_hash, fragment, payload)`; the hash permits caching the key->hash
+    /// mapping and verifying the payload.
     async fn get_resolved(
         &self,
         session_id: u32,
         key: &Hash,
         key_type: KeyType,
         context: &Context,
-        flags: u8,
+        flags: u32,
     ) -> Result<(Hash, Fragment, Bytes), ProtocolError> {
         let _ = (session_id, key, key_type, context, flags);
         Err(ProtocolError::internal("unsupported: get_resolved"))

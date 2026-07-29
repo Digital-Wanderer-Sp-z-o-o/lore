@@ -31,33 +31,30 @@ pub enum Command {
     /// `Fragment` only — no payload bytes. Used by callers that need fragment metadata for
     /// existence/size lookups without paying for the payload transfer.
     GetMetadata = 11,
-    /// Resolve a mutable key and return the immutable blob it points at, in ONE round trip.
+    /// `mutable_load` + `get` performed server-side, saving one round trip. Resolves the key,
+    /// treats the value as an immutable hash, and reads it at the caller-supplied `Context`.
     ///
-    /// The server loads the mutable key, treats the stored value as an immutable content
-    /// hash, pairs it with the caller-supplied `Context` to form an `Address`, and reads
-    /// that blob — i.e. it performs `mutable_load` + `get` server-side. Callers that would
-    /// otherwise issue those two commands back-to-back (each paying a round trip) save one.
+    /// Request:  key `Hash` (32) ++ `Context` (16) ++ `key_type` (1) ++ `flags` u24 LE (3)
+    /// Response: resolved `Hash` (32) ++ `Fragment` (16) ++ payload (`size_payload`)
     ///
-    /// Request:  `Hash` key (32) ++ `Context` (16) ++ `key_type` (1) ++ `flags` (1) = 50 bytes
-    /// Response: resolved `Hash` (32) ++ `Fragment` (16) ++ payload (`size_payload` bytes)
-    ///
-    /// The resolved hash is echoed back so the caller can cache the key->hash mapping and
-    /// still verify the payload against it, rather than trusting the server's resolution.
-    /// Opcodes 4 and 5 are burned (reserved ping/correlate), hence 12.
+    /// The 4-byte `key_type`/`flags` tail keeps the request a multiple of 4. The resolved hash
+    /// is returned so the caller can cache the key->hash mapping and verify the payload.
+    /// Opcodes 4 and 5 are reserved (ping/correlate), hence 12.
     GetResolved = 12,
 }
 
-/// Flags byte of a [`Command::GetResolved`] request.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum GetResolvedFlags {
+/// `flags` field of a [`Command::GetResolved`] request. Reserved; no bits are defined.
+///
+/// Held as `u32`, transmitted as the low 24 bits. Unknown bits are rejected, not ignored.
+pub mod get_resolved_flags {
     /// No optional behaviour.
-    None = 0,
-    /// Reserved: also push every referenced subfragment recursively. NOT IMPLEMENTED — the
-    /// QUIC protocol currently allows exactly one response per `command_id`, so this needs a
-    /// streaming response first. The bit is reserved here so adding it later does not change
-    /// the request layout.
-    AlsoSubfragments = 1,
+    pub const NONE: u32 = 0;
+    /// Bits this build accepts.
+    pub const KNOWN: u32 = 0;
+    /// Wire width in bytes.
+    pub const WIRE_SIZE: usize = 3;
+    /// Largest value representable in [`WIRE_SIZE`] bytes.
+    pub const MAX: u32 = 0x00FF_FFFF;
 }
 
 impl From<Command> for QuicOpCode {

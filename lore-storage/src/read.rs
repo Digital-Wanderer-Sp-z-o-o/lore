@@ -376,16 +376,14 @@ pub async fn load_fragment(
     }
 }
 
-/// Fetch a resolved fragment from a remote session with the same retry semantics as
-/// [`remote_get_retry`]: back off on `SlowDown`, and recover from a stale session id
-/// (a QUIC reconnect resets the server's session map) by invalidating and retrying.
-///
-/// `key` is used only for error context; the caller has no address until the server answers.
+/// [`remote_get_retry`] for `get_resolved`: back off on `SlowDown`, recover from a stale
+/// session id by invalidating and retrying. `key` supplies error context only.
 async fn remote_get_resolved_retry(
     session: &StorageSession,
     key: Hash,
     key_type: KeyType,
     context: Context,
+    flags: u32,
 ) -> Result<(Hash, Fragment, Bytes), StorageError> {
     let _guard = RemoteFetchGuard::new();
     let mut retry = store_retry();
@@ -393,7 +391,7 @@ async fn remote_get_resolved_retry(
     let key_address = Address { hash: key, context };
     loop {
         debug_assert!(!key.is_zero(), "Cannot resolve zero key from store");
-        match session.get_resolved(&key, key_type, &context, 0).await {
+        match session.get_resolved(&key, key_type, &context, flags).await {
             Ok(resolved) => return Ok(resolved),
             Err(ref e) if e.is_slow_down() => {
                 if !retry.wait().await {
@@ -418,30 +416,23 @@ async fn remote_get_resolved_retry(
     }
 }
 
-/// Resolve a mutable key and read the content it points at, in ONE remote round trip.
+/// `mutable_load(key)` + [`read`] of the resulting address, resolved server-side so both
+/// share one round trip. Returns the resolved hash alongside the content.
 ///
-/// Equivalent to `mutable_load(key)` followed by [`read`] of the resulting address, but the
-/// server performs the resolution, so the key lookup and the root fragment fetch share a
-/// single request. Returns the hash the key resolved to alongside the content, so callers can
-/// cache the key->hash mapping themselves.
+/// Differs from [`read`] in two ways, both inherent to saving the round trip: the root is not
+/// probed locally first (its address is unknown until the server answers), and only the root
+/// arrives this way — a fragment list's leaves go through [`load_fragment`] and are still
+/// cached locally. The root is decompressed and verified against the resolved hash as
+/// [`load_fragment`] does.
 ///
-/// Differences from [`read`], both inherent to saving the round trip:
-/// * There is no local-store probe for the *root* — the caller cannot know the root's address
-///   before the server answers, which is the entire point of the command. Callers that expect
-///   to hit locally should keep using `mutable_load` + [`read`].
-/// * Only the root arrives via `get_resolved`. If it is a fragment list, the leaves are read
-///   through the ordinary [`load_fragment`] path, so they are still served from — and written
-///   back to — the local store as usual.
-///
-/// The root is decompressed and verified against the resolved hash exactly as
-/// [`load_fragment`] does, so a server that resolves a key to the wrong content is still
-/// caught rather than trusted.
+/// `flags` is a reserved bitmask forwarded to the server; 0 for default behaviour.
 pub async fn read_resolved(
     store: Arc<dyn ImmutableStore>,
     partition: Partition,
     key: Hash,
     key_type: KeyType,
     context: Context,
+    flags: u32,
     range: Option<Range<usize>>,
     options: ReadOptions,
     session: Arc<StorageSession>,
@@ -449,7 +440,7 @@ pub async fn read_resolved(
     let options = options.with_decompress();
 
     let (resolved, mut fragment, buffer) =
-        remote_get_resolved_retry(session.as_ref(), key, key_type, context).await?;
+        remote_get_resolved_retry(session.as_ref(), key, key_type, context, flags).await?;
 
     if resolved.is_zero() {
         // A zero value means the key was deleted; treat as a miss rather than reading

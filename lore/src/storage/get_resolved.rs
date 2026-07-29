@@ -1,26 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Epic Games, Inc.
 // SPDX-License-Identifier: MIT
-//! `lore_storage_get_resolved` — resolve a mutable key and read what it points at, in ONE
-//! remote round trip.
+//! `lore_storage_get_resolved` — `lore_storage_mutable_load` + `lore_storage_get` performed
+//! server-side, saving one round trip.
 //!
-//! Callers that need "look up this name, then fetch the blob it names" would otherwise call
-//! `lore_storage_mutable_load` and then `lore_storage_get`, paying two sequential round trips.
-//! This entry point issues the `GetResolved` storage command instead, which performs both
-//! steps server-side.
-//!
-//! Per-item event sequence, deliberately identical to `lore_storage_get` so callers can swap
-//! one for the other:
+//! Per-item event sequence, identical to `lore_storage_get`:
 //! - `GET_HEADER { id, address, size_content }`
 //! - `GET_DATA { id, address, offset: 0, bytes }`
 //! - `GET_ITEM_COMPLETE { id, address, error_code }`
 //!
-//! The `address` carried by those events is the RESOLVED address (`{ resolved_hash, context }`),
-//! not the mutable key — so a caller can learn the key->hash mapping from the event stream and
-//! cache it if it wants to skip the resolution next time.
+//! `address` is the resolved address (`{ resolved_hash, context }`), so callers may cache the
+//! key->hash mapping from the event stream.
 //!
-//! This is remote-only: resolution happens on the server, so a handle with no remote session
-//! rejects with `INVALID_ARGUMENTS`. A missing key yields `ADDRESS_NOT_FOUND`, as does a key
-//! that resolves to content the server does not have.
+//! Remote-only: a handle without a remote session rejects with `INVALID_ARGUMENTS`. A missing
+//! key, or one resolving to absent content, yields `ADDRESS_NOT_FOUND`.
 
 use std::sync::Arc;
 
@@ -70,12 +62,15 @@ pub struct LoreStorageGetResolvedItem {
     pub key: Hash,
     /// Kind of value the key refers to
     pub key_type: KeyType,
-    /// Paired with the resolved hash to form the address of the immutable read. The mutable
-    /// store yields only a content hash, so the caller supplies the context.
+    /// Paired with the resolved hash to address the immutable read; the mutable store yields
+    /// only a hash.
     pub context: Context,
     /// Cache fetched bytes back to the local store even without the producer's
     /// `PayloadLocalCachePriority` hint
     pub local_cache: u8,
+    /// Reserved bitmask forwarded to the server, low 24 bits only; 0 for default behaviour.
+    /// Unknown bits are rejected.
+    pub flags: u32,
 }
 
 impl core::fmt::Debug for LoreStorageGetResolvedItem {
@@ -84,6 +79,7 @@ impl core::fmt::Debug for LoreStorageGetResolvedItem {
             .field("id", &self.id)
             .field("key_type", &self.key_type)
             .field("local_cache", &self.local_cache)
+            .field("flags", &self.flags)
             .finish()
     }
 }
@@ -164,8 +160,8 @@ async fn get_resolved_local(
     .await
 }
 
-/// Resolve and read one item, emitting the same `HEADER` / `DATA` / `ITEM_COMPLETE` sequence
-/// as `get`. Returns the per-item `LoreErrorCode` for the call-level aggregator.
+/// Resolve and read one item, emitting the `HEADER` / `DATA` / `ITEM_COMPLETE` sequence.
+/// Returns the per-item `LoreErrorCode` for the call-level aggregator.
 async fn get_resolved_item(
     store: Arc<StoreInternal>,
     item: LoreStorageGetResolvedItem,
@@ -200,6 +196,7 @@ async fn get_resolved_item(
         item.key,
         item.key_type,
         item.context,
+        item.flags,
         None,
         read_options,
         session,
@@ -234,8 +231,8 @@ fn emit_header(item: &LoreStorageGetResolvedItem, address: Address, size_content
     .send();
 }
 
-/// Emit a `GET_DATA` event whose `LoreBytes` view points into `bytes`, with `bytes` attached to
-/// the event as the callback-lifetime keepalive — same contract as `get`'s `emit_data`.
+/// Emit `GET_DATA` with `bytes` attached as the callback-lifetime keepalive; same contract as
+/// `get`'s `emit_data`.
 fn emit_data(item: &LoreStorageGetResolvedItem, address: Address, bytes: Bytes, offset: u64) {
     let data = LoreBytes {
         ptr: bytes.as_ptr().cast(),

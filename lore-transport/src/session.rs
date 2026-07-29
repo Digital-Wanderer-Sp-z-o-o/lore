@@ -230,15 +230,14 @@ impl StorageSession {
         storage.mutable_load(session_id, key, key_type).await
     }
 
-    /// Resolve a mutable key and read the immutable blob it points at in ONE round trip,
-    /// instead of `mutable_load` followed by `get`. Returns `(resolved_hash, fragment,
-    /// payload)`. `flags` is a bitmask of `GetResolvedFlags` (0 for default behaviour).
+    /// `mutable_load` + `get` in one round trip. Returns `(resolved_hash, fragment, payload)`.
+    /// `flags` is a `get_resolved_flags` bitmask; 0 for default behaviour.
     pub async fn get_resolved(
         &self,
         key: &Hash,
         key_type: KeyType,
         context: &Context,
-        flags: u8,
+        flags: u32,
     ) -> Result<(Hash, Fragment, Bytes), ProtocolError> {
         let (storage, session_id) = self.ensure().await?;
         storage
