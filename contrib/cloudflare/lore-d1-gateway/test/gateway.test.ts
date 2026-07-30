@@ -239,10 +239,9 @@ async function signedRequest(url: string, target: string, body: string): Promise
   const canonicalHeaders =
     `content-type:application/x-amz-json-1.0\n` +
     `host:${host}\n` +
-    `x-amz-content-sha256:${bodyHash}\n` +
     `x-amz-date:${amzDate}\n` +
     `x-amz-target:${target}\n`;
-  const signedHeaders = "content-type;host;x-amz-content-sha256;x-amz-date;x-amz-target";
+  const signedHeaders = "content-type;host;x-amz-date;x-amz-target";
   const canonicalRequest = `POST\n/\n\n${canonicalHeaders}\n${signedHeaders}\n${bodyHash}`;
   const scope = `${date}/${region}/dynamodb/aws4_request`;
   const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${await sha256Hex(encoder.encode(canonicalRequest))}`;
@@ -258,7 +257,6 @@ async function signedRequest(url: string, target: string, body: string): Promise
         `AWS4-HMAC-SHA256 Credential=${env.AUTH_ACCESS_KEY_ID}/${scope}, ` +
         `SignedHeaders=${signedHeaders}, Signature=${signature}`,
       "content-type": "application/x-amz-json-1.0",
-      "x-amz-content-sha256": bodyHash,
       "x-amz-date": amzDate,
       "x-amz-target": target,
     },
