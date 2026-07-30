@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Epic Games, Inc.
+// SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
 // SPDX-License-Identifier: MIT
 //! Server entry point for Lore Server.
 //!
@@ -9,9 +10,7 @@
 #[cfg(feature = "seeding")]
 use std::any::Any;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::Weak;
@@ -112,6 +111,7 @@ use crate::telemetry::ResourceDetectorProvider;
 use crate::telemetry::TelemetryInitializer;
 use crate::tls::load_client_tls;
 use crate::topology::configure_topology_with_registry;
+use crate::util::resolve_socket_address;
 use crate::util::setup_execution;
 
 /// Store mode constants for string-based configuration of built-in store types
@@ -357,9 +357,7 @@ async fn launch_quinn_server(
             Arc::new(NoClientAuth {})
         };
 
-        let addr = SocketAddr::from_str(
-            format!("{}:{}", quic_settings.host, quic_settings.port).as_str(),
-        )?;
+        let addr = resolve_socket_address(&quic_settings.host, quic_settings.port).await?;
 
         let mut settings_builder: QuinnConfigBuilder = quic_settings.into();
 
@@ -429,8 +427,7 @@ async fn launch_grpc_server(
         .ok_or(anyhow!("Missing gRPC settings"))?;
     let service_settings = settings.server.grpc_public_services.clone();
 
-    let addr =
-        SocketAddr::from_str(format!("{}:{}", grpc_settings.host, grpc_settings.port).as_str())?;
+    let addr = resolve_socket_address(&grpc_settings.host, grpc_settings.port).await?;
 
     info!(
         "Starting Lore GRPC Server: {}, Auth: {} Locks: {}",
@@ -565,8 +562,7 @@ async fn launch_grpc_internal_server(
         .grpc_internal
         .ok_or(anyhow!("Missing gRPC internal settings"))?;
 
-    let addr =
-        SocketAddr::from_str(format!("{}:{}", grpc_settings.host, grpc_settings.port).as_str())?;
+    let addr = resolve_socket_address(&grpc_settings.host, grpc_settings.port).await?;
 
     info!("Starting Lore gRPC internal server: {}", &addr);
 
@@ -640,8 +636,7 @@ async fn launch_maintenance_grpc_server(
         .clone()
         .ok_or(anyhow!("Missing gRPC settings"))?;
 
-    let addr =
-        SocketAddr::from_str(format!("{}:{}", grpc_settings.host, grpc_settings.port).as_str())?;
+    let addr = resolve_socket_address(&grpc_settings.host, grpc_settings.port).await?;
 
     info!("Starting Lore maintenance gRPC Server: {}", &addr);
 

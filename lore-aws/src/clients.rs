@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Epic Games, Inc.
+// SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
 // SPDX-License-Identifier: MIT
 use std::sync::Arc;
 use std::time::Duration;
 
 use aws_config::meta::region::ProvideRegion;
+use aws_credential_types::Credentials;
 use aws_sdk_dynamodb::config::ProvideCredentials;
 use aws_sdk_dynamodb::operation::describe_table::DescribeTableError;
 use aws_sdk_s3::operation::head_bucket::HeadBucketError;
@@ -139,6 +141,24 @@ pub struct WantsAwsConfig {
 }
 
 impl AwsClientBuilder<WantsAwsConfig> {
+    pub fn with_static_credentials(
+        mut self,
+        access_key_id: impl Into<String>,
+        secret_access_key: impl Into<String>,
+        session_token: Option<String>,
+        provider_name: &'static str,
+    ) -> Self {
+        self.0.config = self.0.config.credentials_provider(Credentials::new(
+            access_key_id,
+            secret_access_key,
+            session_token,
+            None,
+            provider_name,
+        ));
+
+        self
+    }
+
     pub fn with_credentials_provider(
         mut self,
         credentials_provider: impl ProvideCredentials + 'static,

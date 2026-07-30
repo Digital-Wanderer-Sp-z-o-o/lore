@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
+# SPDX-License-Identifier: MIT
+
 FROM rust:slim-trixie AS builder
 
 RUN apt-get update && apt-get install -y \
@@ -42,7 +45,7 @@ ENV RUST_LOG=info
 RUN mkdir -p /data
 VOLUME /data
 
-# QUIC + gRPC: 41337, HTTP: 41339
-EXPOSE 41337 41339
+# QUIC (UDP) + gRPC (TCP): 41337, HTTP: 41339
+EXPOSE 41337/tcp 41337/udp 41339/tcp
 
 ENTRYPOINT ["loreserver"]

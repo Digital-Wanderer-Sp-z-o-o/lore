@@ -2474,6 +2474,7 @@ version = "0.8.7-nightly"
 dependencies = [
  "async-trait",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-dynamodb",
  "aws-sdk-s3",
  "aws-smithy-http-client",
