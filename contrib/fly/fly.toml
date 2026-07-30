@@ -12,6 +12,11 @@ dockerfile = "../../lore-server/Dockerfile"
 [env]
 LORE_ENV = "fly"
 LORE__SERVER__QUIC__HOST = "::"
+# D1 is reached through a signed Worker gateway. Realizing a large binary can
+# keep one QUIC request busy while thousands of fragment lookups complete, so
+# the default 30-second transport idle timeout is too short for this backend.
+LORE__SERVER__QUIC__IDLE_TIMEOUT = "300000"
+LORE__SERVER__QUIC__HANDLER_TIMEOUT_SECONDS = "300"
 LORE__SERVER__GRPC__HOST = "::"
 LORE__SERVER__HTTP__HOST = "::"
 RUST_LOG = "info"
