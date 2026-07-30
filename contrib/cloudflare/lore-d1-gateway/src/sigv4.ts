@@ -34,8 +34,11 @@ export async function verifySigV4(
 
   const body = await request.arrayBuffer();
   const payloadHash = await sha256Hex(body);
-  const signedPayloadHash = requiredHeader(request, "x-amz-content-sha256");
-  if (!timingSafeTextEqual(payloadHash, signedPayloadHash.toLowerCase())) {
+  const signedPayloadHash = request.headers.get("x-amz-content-sha256");
+  if (
+    signedPayloadHash !== null &&
+    !timingSafeTextEqual(payloadHash, signedPayloadHash.toLowerCase())
+  ) {
     throw signatureError("The request payload hash does not match");
   }
 
