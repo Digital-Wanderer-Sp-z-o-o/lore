@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 async-trait = { workspace = true }
 aws-config = { version = "1.8.12", default-features = false, features = ["rt-tokio"] }
+aws-credential-types = { version = "1.2.14", default-features = false }
 aws-sdk-dynamodb = { version = "1.103.0", default-features = false, features = ["rt-tokio"] }
 aws-sdk-s3 = { version = "1.121.0", default-features = false, features = ["rt-tokio"] }
 aws-smithy-runtime-api = { version = "1.11.3", default-features = false }

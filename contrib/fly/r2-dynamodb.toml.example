@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
+# SPDX-License-Identifier: MIT
+
+# Copy this file to a private deployment config after provisioning the named resources.
+# Secret values stay in environment variables; only their variable names are configured here.
+
+[immutable_store]
+mode = "aws"
+
+[mutable_store]
+mode = "aws"
+
+[lock_store]
+mode = "aws"
+
+[plugins.aws.immutable_store]
+s3_bucket = "archigma-lore-staging"
+s3_endpoint_url = "https://<cloudflare-account-id>.r2.cloudflarestorage.com"
+s3_region = "auto"
+s3_force_path_style = true
+s3_object_versioning = "disabled"
+s3_credentials = { access_key_id_env = "R2_ACCESS_KEY_ID", secret_access_key_env = "R2_SECRET_ACCESS_KEY" }
+dynamodb_fragments_table = "archigma-lore-staging-fragments"
+dynamodb_metadata_table = "archigma-lore-staging-metadata"
+dynamodb_region = "eu-central-1"
+
+[plugins.aws.mutable_store]
+dynamodb_table = "archigma-lore-staging-mutable"
+dynamodb_region = "eu-central-1"
+
+[plugins.aws.lock_store]
+dynamodb_table = "archigma-lore-staging-locks"
+dynamodb_region = "eu-central-1"

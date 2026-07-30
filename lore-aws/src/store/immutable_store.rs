@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Epic Games, Inc.
+// SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
 // SPDX-License-Identifier: MIT
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -135,6 +136,20 @@ pub struct S3StoreSettings {
     pub slow_operation_threshold_millis: u64,
     #[serde(default = "default_aws_timeout_millis")]
     pub timeout_millis: u64,
+    #[serde(default)]
+    pub object_versioning: S3ObjectVersioning,
+}
+
+/// Controls whether payload obliteration must enumerate and remove every S3 object version.
+///
+/// Cloudflare R2 does not implement `ListObjectVersions`, so R2-backed stores must use
+/// [`S3ObjectVersioning::Disabled`]. AWS S3 keeps the existing version-aware behavior by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum S3ObjectVersioning {
+    #[default]
+    Enabled,
+    Disabled,
 }
 
 impl S3StoreSettings {
@@ -145,6 +160,7 @@ impl S3StoreSettings {
             region: None,
             slow_operation_threshold_millis: u64::MAX,
             timeout_millis: default_aws_timeout_millis(),
+            object_versioning: S3ObjectVersioning::Enabled,
         }
     }
 
@@ -340,6 +356,7 @@ pub struct AwsImmutableStore {
     dynamodb: DynamoDb,
     task_queue: TaskQueue<BatchTaskResult>,
     bucket: String,
+    s3_object_versioning: S3ObjectVersioning,
     fragments_table_name: Arc<str>,
     metadata_table_name: Arc<str>,
     force_write: bool,
@@ -379,6 +396,7 @@ impl AwsImmutableStore {
                 )],
             ),
             bucket: settings.s3.bucket.clone(),
+            s3_object_versioning: settings.s3.object_versioning,
             fragments_table_name: Arc::from(settings.dynamodb.fragments_table_name.clone()),
             metadata_table_name: Arc::from(settings.dynamodb.metadata_table_name.clone()),
             force_write: settings.force_write,
@@ -957,11 +975,19 @@ impl AwsImmutableStore {
         Ok(())
     }
 
-    /// Permanently delete a payload from S3 by removing *ALL* versions from the bucket.
+    /// Permanently deletes a payload according to the configured object versioning mode.
     async fn delete_payload(&self, hash: Hash) -> Result<(), StoreError> {
         let mut dst = [0u8; 64];
         let hash = lore_revision::util::to_hex_str(hash.data(), &mut dst);
 
+        match self.s3_object_versioning {
+            S3ObjectVersioning::Enabled => self.delete_versioned_payload(hash).await,
+            S3ObjectVersioning::Disabled => self.delete_payload_object(hash, None).await,
+        }
+    }
+
+    /// Removes every stored version of a payload from a versioned S3 bucket.
+    async fn delete_versioned_payload(&self, hash: &str) -> Result<(), StoreError> {
         let versions: Option<Vec<Option<String>>> = self
             .s3
             .list_versions(self.bucket.as_str(), hash)
@@ -982,33 +1008,32 @@ impl AwsImmutableStore {
 
         if let Some(versions) = versions {
             for version in versions {
-                self.s3
-                    .delete_object(self.bucket.as_str(), hash, version)
-                    .await
-                    .map_err(|e| {
-                        warn!("Failed to delete payload for hash: {hash}: {e:?}");
-                        if matches!(&e, AwsError::AwsSdkError(_)) {
-                            StoreError::from(SlowDown)
-                        } else {
-                            StoreError::internal_with_context(e, "S3 delete object version failed")
-                        }
-                    })?;
+                self.delete_payload_object(hash, version).await?;
             }
         } else {
-            self.s3
-                .delete_object(self.bucket.as_str(), hash, None)
-                .await
-                .map_err(|e| {
-                    warn!("Failed to delete payload for hash: {hash}: {e:?}");
-                    if matches!(&e, AwsError::AwsSdkError(_)) {
-                        StoreError::from(SlowDown)
-                    } else {
-                        StoreError::internal_with_context(e, "S3 delete object failed")
-                    }
-                })?;
+            self.delete_payload_object(hash, None).await?;
         }
 
         Ok(())
+    }
+
+    async fn delete_payload_object(
+        &self,
+        hash: &str,
+        version: Option<String>,
+    ) -> Result<(), StoreError> {
+        self.s3
+            .delete_object(self.bucket.as_str(), hash, version)
+            .await
+            .map(|_| ())
+            .map_err(|e| {
+                warn!("Failed to delete payload for hash: {hash}: {e:?}");
+                if matches!(&e, AwsError::AwsSdkError(_)) {
+                    StoreError::from(SlowDown)
+                } else {
+                    StoreError::internal_with_context(e, "S3 delete object failed")
+                }
+            })
     }
 
     /// Loads fragment metadata, with just size validation
@@ -1775,8 +1800,18 @@ mod test {
     }
 
     async fn initialize_immutable_store(s3: S3, dynamodb: DynamoDb) -> AwsImmutableStore {
+        initialize_immutable_store_with_versioning(s3, dynamodb, S3ObjectVersioning::Enabled).await
+    }
+
+    async fn initialize_immutable_store_with_versioning(
+        s3: S3,
+        dynamodb: DynamoDb,
+        object_versioning: S3ObjectVersioning,
+    ) -> AwsImmutableStore {
+        let mut s3_settings = S3StoreSettings::new(BUCKET.to_string());
+        s3_settings.object_versioning = object_versioning;
         let settings = AwsImmutableStoreSettings {
-            s3: S3StoreSettings::new(BUCKET.to_string()),
+            s3: s3_settings,
             dynamodb: DynamoDbImmutableStoreSettings::new(
                 FRAGMENTS_TABLE_NAME.to_string(),
                 METADATA_TABLE_NAME.to_string(),
@@ -3150,6 +3185,22 @@ mod test {
                     Ok(DeleteObjectOutput::builder().build())
                 }
             });
+    }
+
+    #[tokio::test]
+    async fn test_delete_payload_without_object_versioning() {
+        let hash = random::<Hash>();
+        let mut s3mock = MockS3Impl::default();
+        mock_delete_payload(&mut s3mock, hash, None, false);
+
+        let store = initialize_immutable_store_with_versioning(
+            s3mock,
+            MockDynamoDb::default(),
+            S3ObjectVersioning::Disabled,
+        )
+        .await;
+
+        store.delete_payload(hash).await.expect("delete failed");
     }
 
     #[tokio::test]
