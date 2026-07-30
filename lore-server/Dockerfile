@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=builder /build/loreserver-bin /usr/local/bin/loreserver
 COPY --from=builder /build/lore-server/config/default.toml /etc/lore/config/default.toml
+COPY --from=builder /build/contrib/fly/config.toml /etc/lore/config/fly.toml
 
 # Docker environment config: local stores at /data. No QUIC certificate is
 # configured, so the server generates an ephemeral self-signed cert for the
@@ -43,7 +44,6 @@ ENV LORE_ENV=docker
 ENV RUST_LOG=info
 
 RUN mkdir -p /data
-VOLUME /data
 
 # QUIC (UDP) + gRPC (TCP): 41337, HTTP: 41339
 EXPOSE 41337/tcp 41337/udp 41339/tcp

@@ -86,9 +86,14 @@ Desktop.ini
 __pycache__
 
 # Packages
+**/node_modules/
 *.egg
 *.egg-info
 dist
+coverage/
+**/.wrangler/
+.dev.vars
+contrib/cloudflare/lore-d1-gateway/worker-configuration.d.ts
 eggs
 parts
 var
