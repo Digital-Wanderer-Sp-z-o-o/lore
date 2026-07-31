@@ -30,6 +30,12 @@ An EX-series machine is a Robot/dedicated-server product. `hcloud` credentials m
 VMs and cannot provision this server class. Provision it in Robot or with Robot API credentials,
 record the exact hardware/price, and install current Debian or Ubuntu.
 
+Hetzner `installimage` on a UEFI host requires an explicit EFI System Partition. For the two-disk
+RAID1 layout used by this profile, use the equivalent of
+`/boot/efi:esp:256M,/boot:ext4:1G,/:ext4:all`; omitting the ESP fails validation before
+partitioning. After reboot, verify both arrays report `[UU]` in `/proc/mdstat` before accepting the
+host.
+
 ## Private access
 
 The staging endpoint has no JWT configuration. Put client traffic on WireGuard and allow these ports
