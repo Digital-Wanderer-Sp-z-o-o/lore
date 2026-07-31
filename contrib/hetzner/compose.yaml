@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
+# SPDX-License-Identifier: MIT
+
+services:
+  lore-server:
+    container_name: archigma-lore-staging
+    build:
+      context: ../..
+      dockerfile: lore-server/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      LORE_CONFIG_PATH: /etc/lore/config
+      LORE_ENV: hetzner
+      RUST_LOG: info
+    volumes:
+      - ./config.toml:/etc/lore/config/hetzner.toml:ro
+      - ${LORE_CACHE_ROOT:-/var/lib/lore/cache}:/data/cache
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: "5"
