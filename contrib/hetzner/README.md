@@ -79,6 +79,11 @@ Authentication has a strict deployment order:
    admin API;
 4. only then redeploy this Lore Server configuration.
 
+Keep `[environment.endpoint].auth_url` on the `ucs-auth://` scheme. The client
+uses that complete endpoint string as the token-store key, so advertising the
+same host as `https://` after a `ucs-auth://` login makes a valid stored identity
+look missing. The JWK endpoint remains a normal `https://` URL.
+
 Deploying step 4 first makes Lore Server unable to fetch its configured JWKS. The Rendermoon
 runbook is `docs/operations/lore-auth.md` in the Archigma repository.
 
