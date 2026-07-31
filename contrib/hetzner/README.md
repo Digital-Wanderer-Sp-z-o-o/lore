@@ -36,10 +36,10 @@ RAID1 layout used by this profile, use the equivalent of
 partitioning. After reboot, verify both arrays report `[UU]` in `/proc/mdstat` before accepting the
 host.
 
-## Private access
+## Private access and authentication
 
-The staging endpoint has no JWT configuration. Put client traffic on WireGuard and allow these ports
-only from the team VPN CIDR:
+The checked-in profile requires repository-scoped JWTs issued from existing Rendermoon accounts.
+Put client traffic on WireGuard and allow these ports only from the team VPN CIDR:
 
 | Port | Protocol | Purpose |
 | --- | --- | --- |
@@ -48,8 +48,9 @@ only from the team VPN CIDR:
 | 22 | TCP | administration, preferably only over WireGuard |
 
 The HTTP health endpoint binds to loopback and is not public. Use `lore://` only inside this private
-test network; that URL scheme intentionally skips certificate verification. Before non-staging
-access, configure a trusted `lores://` certificate and Lore JWT authorization.
+test network; that URL scheme intentionally skips certificate verification. JWT protects the Lore
+application requests but does not encrypt this transport. Before non-staging access, configure a
+trusted `lores://` certificate as well.
 
 The checked-in staging profile binds QUIC and gRPC specifically to the server WireGuard address
 `10.80.0.10`. Keep that address in sync with `wg0`; do not broaden the bind to `0.0.0.0`.
@@ -70,6 +71,17 @@ Worker's `AUTH_SECRET_ACCESS_KEY`. The binding name is retained for bootstrap co
 only the Worker HMAC secret and does not enable or call AWS. The server no longer receives R2 or
 AWS-compatible credentials.
 
+Authentication has a strict deployment order:
+
+1. deploy the `rm-api` LORE auth adapter with its RSA signing-key secrets;
+2. verify `https://rendermoon-staging.fly.dev/api/v1/lore/auth/jwks.json`;
+3. register `urc-019fb946db5876239c2749aa8a51545d` and its initial owners through the Rendermoon
+   admin API;
+4. only then redeploy this Lore Server configuration.
+
+Deploying step 4 first makes Lore Server unable to fetch its configured JWKS. The Rendermoon
+runbook is `docs/operations/lore-auth.md` in the Archigma repository.
+
 Create the cache root and start Lore:
 
 ```bash
@@ -78,6 +90,16 @@ docker compose build
 docker compose up -d
 curl --fail http://127.0.0.1:41339/health_check
 docker compose logs --tail 100 lore-server
+```
+
+After startup, log in with a Rendermoon API key (or omit the token options for the browser handoff):
+
+```bash
+lore auth login \
+  --token-type api-key \
+  --token "$RENDERMOON_LORE_API_KEY" \
+  --auth-url ucs-auth://rendermoon-staging.fly.dev \
+  --non-interactive
 ```
 
 The Compose service uses host networking so the same port can serve QUIC on UDP and gRPC on TCP.
