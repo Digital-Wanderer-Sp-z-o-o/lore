@@ -149,7 +149,8 @@ impl Drop for RemoteFetchGuard {
 /// transient `NotConnected` responses (e.g. the server's session-id map was
 /// reset by a QUIC reconnect; the storage layer mapping turns this into
 /// `StorageError::NotConnected`, which we recover from by invalidating the
-/// cached session and retrying with a fresh `session_start`).
+/// cached session inside `StorageSession` and retrying with a fresh
+/// `session_start`).
 async fn remote_get_retry(
     session: &StorageSession,
     address: Address,
@@ -181,7 +182,6 @@ async fn remote_get_retry(
                     && stale_session_retries < MAX_STALE_SESSION_RETRIES
                 {
                     stale_session_retries += 1;
-                    session.invalidate().await;
                     if !retry.wait().await {
                         return Err(storage_err);
                     }
