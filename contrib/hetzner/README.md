@@ -66,7 +66,9 @@ chmod 600 .env
 ```
 
 Fill `LORE_CLOUDFLARE_SHARED_SECRET` in `.env` with the same value installed as the staging
-Worker's `AUTH_SHARED_SECRET`. The server no longer receives R2 or AWS-compatible credentials.
+Worker's `AUTH_SECRET_ACCESS_KEY`. The binding name is retained for bootstrap compatibility; it is
+only the Worker HMAC secret and does not enable or call AWS. The server no longer receives R2 or
+AWS-compatible credentials.
 
 Create the cache root and start Lore:
 
