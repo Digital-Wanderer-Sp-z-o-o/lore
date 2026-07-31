@@ -9,9 +9,9 @@ Last reviewed: **2026-07-31**
 
 Target: one approximately 10 TB repository, growth to 50 TB, about 80 concurrent users
 
-Review basis: the local `0.8.7-nightly` fork at commit `75a252fe`, Lore's published `0.8.5`
-documentation, the accepted storage/plugin ADRs, the current store traits, and Cloudflare and
-Hetzner platform documentation available on the review date.
+Review basis: the local `0.8.7-nightly` fork with the Cloudflare backend at commit `d061a1e`,
+Lore's published `0.8.5` documentation, the accepted storage/plugin ADRs, the current store traits,
+and Cloudflare and Hetzner platform documentation available on the review date.
 
 ## Decision summary
 
@@ -32,6 +32,23 @@ compatibility gateway with a native Cloudflare backend:
 
 The current D1 gateway is useful as a staging proof of concept only. It must not be promoted as the
 50 TB / 80-user production metadata architecture.
+
+## Staging evidence on 2026-07-31
+
+- `archigma-lore-do-staging` is deployed with three SQLite Durable Object classes and the private
+  `archigma-lore-staging` R2 binding. A signed remote smoke test passed immutable payload
+  put/get/delete and mutable compare-and-swap.
+- The Hetzner server is running the exact `d061a1e` image with zero restarts. Its active immutable,
+  mutable, and lock durable stores all use the native `cloudflare` plugin; the D1 gateway is not in
+  the request path.
+- A real uncompressed Blender file was committed, pushed, cold-cloned, modified, pushed, and synced
+  through Lore. Both revisions passed repository verification and the final source/clone SHA-256
+  hashes matched. The incremental sync completed in 0.63 seconds for this small smoke fixture.
+- Worker tests cover batch result ordering, mutable CAS contention, atomic lock conflicts, and R2
+  immutability. This is smoke/conformance evidence, not the distributed 80-client qualification.
+- The staging server deliberately has JWT disabled. Consequently, two CLI clients are treated as
+  the same anonymous lock owner; a meaningful cross-user lock-contention test is impossible until
+  Lore JWT authentication is enabled. Do not onboard the team while this remains true.
 
 ## What changed after the Lore architecture review
 
