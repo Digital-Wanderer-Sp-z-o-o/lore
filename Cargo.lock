@@ -2585,6 +2585,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "lore-cloudflare"
+version = "0.8.7-nightly"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "hex",
+ "lore-base",
+ "lore-revision",
+ "lore-storage",
+ "rand",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "zerocopy",
+]
+
+[[package]]
 name = "lore-credential"
 version = "0.8.7-nightly"
 dependencies = [
@@ -2802,6 +2824,7 @@ dependencies = [
  "jsonwebtoken",
  "lore-aws",
  "lore-base",
+ "lore-cloudflare",
  "lore-error-set",
  "lore-hashicorp",
  "lore-macro",

@@ -32,43 +32,17 @@ local.compaction_delay = 60_000
 local.compaction_parallel_groups = 8
 
 [immutable_store.composite.durable]
-mode = "aws"
+mode = "cloudflare"
 
 [mutable_store]
-mode = "aws"
+mode = "cloudflare"
 
 [lock_store]
-mode = "aws"
+mode = "cloudflare"
 
-# Temporary Phase 1 baseline only. Replace the D1 gateway settings with the
-# native Cloudflare plugin from ARCHITECTURE.md before production ingest.
-[plugins.aws.immutable_store]
-s3_bucket = "archigma-lore-staging"
-s3_endpoint_url = "https://df2d78fee751d9462a9ddf034ad068b5.r2.cloudflarestorage.com"
-s3_region = "auto"
-s3_force_path_style = true
-s3_object_versioning = "disabled"
-s3_credentials = { access_key_id_env = "R2_ACCESS_KEY_ID", secret_access_key_env = "R2_SECRET_ACCESS_KEY" }
-s3_slow_operation_threshold_millis = 5000
-dynamodb_fragments_table = "archigma-lore-staging-fragments"
-dynamodb_metadata_table = "archigma-lore-staging-metadata"
-dynamodb_endpoint_url = "https://archigma-lore-d1-staging.damian-podwiazka.workers.dev"
-dynamodb_region = "auto"
-dynamodb_slow_operation_threshold_millis = 2000
-timeout_millis = 15_000
-
-[plugins.aws.mutable_store]
-dynamodb_table = "archigma-lore-staging-mutable"
-dynamodb_endpoint_url = "https://archigma-lore-d1-staging.damian-podwiazka.workers.dev"
-dynamodb_region = "auto"
-dynamodb_slow_operation_threshold_millis = 2000
-timeout_millis = 15_000
-
-[plugins.aws.lock_store]
-dynamodb_table = "archigma-lore-staging-locks"
-dynamodb_endpoint_url = "https://archigma-lore-d1-staging.damian-podwiazka.workers.dev"
-dynamodb_region = "auto"
-dynamodb_slow_operation_threshold_millis = 1000
+[plugins.cloudflare]
+endpoint_url = "https://archigma-lore-do-staging.damian-podwiazka.workers.dev"
+auth_shared_secret_env = "LORE_CLOUDFLARE_SHARED_SECRET"
 timeout_millis = 15_000
 
 [topology]

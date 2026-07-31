@@ -1,0 +1,19 @@
+{
+  "name": "@digital-wanderer/lore-do-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "wrangler types && tsc --noEmit",
+    "deploy:staging": "wrangler deploy --env staging --minify",
+    "test": "vitest run",
+    "types": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.19.1",
+    "@types/node": "24.10.2",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10",
+    "wrangler": "4.116.0"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "archigma-lore-do",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "exports": {
+    "ImmutableMetadataShard": { "type": "durable-object", "storage": "sqlite" },
+    "MutablePartitionStore": { "type": "durable-object", "storage": "sqlite" },
+    "LockCoordinator": { "type": "durable-object", "storage": "sqlite" }
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "IMMUTABLE_METADATA", "class_name": "ImmutableMetadataShard" },
+      { "name": "MUTABLE_PARTITIONS", "class_name": "MutablePartitionStore" },
+      { "name": "LOCK_COORDINATOR", "class_name": "LockCoordinator" }
+    ]
+  },
+  "r2_buckets": [
+    { "binding": "PAYLOADS", "bucket_name": "archigma-lore-local" }
+  ],
+  "secrets": { "required": ["AUTH_SHARED_SECRET"] },
+  "vars": {
+    "MAX_BATCH_SIZE": "256"
+  },
+  "env": {
+    "staging": {
+      "name": "archigma-lore-do-staging",
+      "durable_objects": {
+        "bindings": [
+          { "name": "IMMUTABLE_METADATA", "class_name": "ImmutableMetadataShard" },
+          { "name": "MUTABLE_PARTITIONS", "class_name": "MutablePartitionStore" },
+          { "name": "LOCK_COORDINATOR", "class_name": "LockCoordinator" }
+        ]
+      },
+      "r2_buckets": [
+        { "binding": "PAYLOADS", "bucket_name": "archigma-lore-staging" }
+      ],
+      "secrets": { "required": ["AUTH_SHARED_SECRET"] },
+      "vars": { "MAX_BATCH_SIZE": "256" }
+    }
+  }
+}
