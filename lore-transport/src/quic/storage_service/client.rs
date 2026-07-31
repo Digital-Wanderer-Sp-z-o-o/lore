@@ -59,7 +59,7 @@ use crate::traits::StorageSessionLease;
 // A bounded per-client window keeps enough data in flight for a WAN checkout
 // while preventing one checkout from queueing hundreds of responses ahead of
 // its peers on a saturated server link.
-const INFLIGHT_COMMAND_LIMIT: usize = 64;
+const INFLIGHT_COMMAND_LIMIT: usize = 16;
 
 const MAX_BYTES_BANDWIDTH_PER_SEC: u64 = (1024 * 1024 * 1024) / 8;
 
@@ -625,7 +625,7 @@ mod tests {
     fn storage_transport_bounds_inflight_work_and_uses_wan_liveness_defaults() {
         let transport = default_transport_config();
 
-        assert_eq!(INFLIGHT_COMMAND_LIMIT, 64);
+        assert_eq!(INFLIGHT_COMMAND_LIMIT, 16);
         assert_eq!(transport.idle_timeout, DEFAULT_IDLE_TIMEOUT);
         assert_eq!(transport.keep_alive_interval, DEFAULT_KEEP_ALIVE_INTERVAL);
     }
