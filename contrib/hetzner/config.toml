@@ -24,7 +24,7 @@ jwt_audience = ["lore-service"]
 endpoint = "https://rendermoon-staging.fly.dev/api/v1/lore/auth/jwks.json"
 
 [environment.endpoint]
-auth_url = "https://rendermoon-staging.fly.dev"
+auth_url = "ucs-auth://rendermoon-staging.fly.dev"
 
 [immutable_store]
 mode = "composite"
