@@ -23,7 +23,7 @@
   "r2_buckets": [
     { "binding": "PAYLOADS", "bucket_name": "archigma-lore-local" }
   ],
-  "secrets": { "required": ["AUTH_SHARED_SECRET"] },
+  "secrets": { "required": ["AUTH_SECRET_ACCESS_KEY"] },
   "vars": {
     "MAX_BATCH_SIZE": "256"
   },
@@ -40,7 +40,7 @@
       "r2_buckets": [
         { "binding": "PAYLOADS", "bucket_name": "archigma-lore-staging" }
       ],
-      "secrets": { "required": ["AUTH_SHARED_SECRET"] },
+      "secrets": { "required": ["AUTH_SECRET_ACCESS_KEY"] },
       "vars": { "MAX_BATCH_SIZE": "256" }
     }
   }

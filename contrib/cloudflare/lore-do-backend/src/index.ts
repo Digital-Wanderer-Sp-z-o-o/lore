@@ -33,7 +33,7 @@ export default {
     }
 
     const rawBody = await request.arrayBuffer();
-    if (!(await authenticated(request, url.pathname, rawBody, env.AUTH_SHARED_SECRET))) {
+    if (!(await authenticated(request, url.pathname, rawBody, env.AUTH_SECRET_ACCESS_KEY))) {
       return errorResponse(401, "invalid_request", "invalid request signature");
     }
 

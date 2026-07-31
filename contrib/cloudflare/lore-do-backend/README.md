@@ -29,7 +29,7 @@ npx wrangler deploy --dry-run --env staging
 Create a random secret of at least 32 characters and install it without committing it:
 
 ```bash
-npx wrangler secret put AUTH_SHARED_SECRET --env staging
+npx wrangler secret put AUTH_SECRET_ACCESS_KEY --env staging
 npm run deploy:staging
 ```
 
