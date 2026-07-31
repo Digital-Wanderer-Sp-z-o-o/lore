@@ -3,6 +3,12 @@
 
 # Private, stateless Lore staging on Fly.io
 
+> [!WARNING]
+> This is a staging proof of concept, not the proposed 10-50 TB production architecture. The D1
+> DynamoDB compatibility gateway has already shown hot-path latency and incorrect transient
+> not-found behavior under concurrent clone load. See the
+> [reviewed Cloudflare/Hetzner architecture](../cloudflare/ARCHITECTURE.md) before extending it.
+
 Lore runs as a stateless Fly Machine in Frankfurt and has no Fly volume. Cloudflare owns all
 durable state:
 
