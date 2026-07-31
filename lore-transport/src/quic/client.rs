@@ -469,12 +469,16 @@ pub enum ReconnectError {
 /// cost. Using a const generic resolves the priority value at compile time through
 /// monomorphization, adding zero bytes to the future. This is validated by the
 /// `test_futures_size` test which enforces a strict upper bound on the get future size.
-pub async fn send_with_reconnect<ServiceClientType, const LEN: usize, const HIGH_PRIORITY: bool>(
+pub async fn send_with_reconnect_epoch<
+    ServiceClientType,
+    const LEN: usize,
+    const HIGH_PRIORITY: bool,
+>(
     service_client: &ServiceClientType,
     request_type: ServiceClientType::RequestType,
     session_id: u32,
     chunks: impl Fn() -> [Bytes; LEN],
-) -> Result<Bytes, ServiceClientType::ErrorType>
+) -> Result<(Bytes, u32), ServiceClientType::ErrorType>
 where
     ServiceClientType: ServiceClient,
 {
@@ -495,7 +499,7 @@ where
         )
         .await
         {
-            Ok(payload) => return Ok(payload),
+            Ok(payload) => return Ok((payload, epoch)),
             // error handling for things that cannot be recovered by reconnecting
             // and should be bubbled up to the caller immediately
             Err(err)
@@ -557,6 +561,25 @@ where
                 .map_send_error(request_type, SendWithReconnectError::ReconnectFailed));
         }
     }
+}
+
+pub async fn send_with_reconnect<ServiceClientType, const LEN: usize, const HIGH_PRIORITY: bool>(
+    service_client: &ServiceClientType,
+    request_type: ServiceClientType::RequestType,
+    session_id: u32,
+    chunks: impl Fn() -> [Bytes; LEN],
+) -> Result<Bytes, ServiceClientType::ErrorType>
+where
+    ServiceClientType: ServiceClient,
+{
+    send_with_reconnect_epoch::<ServiceClientType, LEN, HIGH_PRIORITY>(
+        service_client,
+        request_type,
+        session_id,
+        chunks,
+    )
+    .await
+    .map(|(payload, _epoch)| payload)
 }
 
 fn strip_ipv6_brackets(host: &str) -> &str {
@@ -1103,6 +1126,23 @@ where
     ServiceClientType: ServiceClient,
 {
     send_with_reconnect::<ServiceClientType, LEN, false>(
+        service_client,
+        request_type,
+        session_id,
+        chunks,
+    )
+}
+
+pub fn send_normal_with_reconnect_epoch<'a, ServiceClientType, const LEN: usize>(
+    service_client: &'a ServiceClientType,
+    request_type: ServiceClientType::RequestType,
+    session_id: u32,
+    chunks: impl Fn() -> [Bytes; LEN] + Send + 'a,
+) -> impl Future<Output = Result<(Bytes, u32), ServiceClientType::ErrorType>> + Send + 'a
+where
+    ServiceClientType: ServiceClient,
+{
+    send_with_reconnect_epoch::<ServiceClientType, LEN, false>(
         service_client,
         request_type,
         session_id,
