@@ -68,10 +68,32 @@ pub struct EndpointConfig {
     pub sni_override: Option<String>,
 }
 
-const IDLE_TIMEOUT_MS: u32 = 30000;
-const KEEP_ALIVE_MS: u64 = 500;
 const HANDSHAKE_TIMEOUT_SECS: u64 = 5;
 pub const DEFAULT_EXPECTED_RTT_MS: u64 = 100;
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+pub const DEFAULT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_millis(500);
+
+fn validate_liveness(
+    idle_timeout: Duration,
+    keep_alive_interval: Duration,
+) -> Result<(), ProtocolError> {
+    if idle_timeout.is_zero() {
+        return Err(ProtocolError::internal(
+            "QUIC idle timeout must be greater than zero",
+        ));
+    }
+    if keep_alive_interval.is_zero() {
+        return Err(ProtocolError::internal(
+            "QUIC keep-alive interval must be greater than zero",
+        ));
+    }
+    if keep_alive_interval >= idle_timeout {
+        return Err(ProtocolError::internal(
+            "QUIC keep-alive interval must be shorter than the idle timeout",
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug)]
 pub struct ClientCerts {
@@ -206,6 +228,10 @@ pub struct TransportConfig {
     pub congestion_algorithm: CongestionAlgorithm,
     /// Warm-start hint for Congestion Algorithms: seed the initial congestion window
     pub initial_cwnd: Option<u64>,
+    /// Maximum time without acknowledged QUIC traffic before considering the peer lost.
+    pub idle_timeout: Duration,
+    /// Interval for ack-eliciting keep-alive frames while a connection is otherwise idle.
+    pub keep_alive_interval: Duration,
 }
 
 /// When working within a QUIC connection, these are the opportunities
@@ -706,9 +732,12 @@ pub async fn connect(
         .max_concurrent_uni_streams(0_u8.into())
         .max_concurrent_bidi_streams(STREAM_COUNT.into());
 
+    validate_liveness(transport.idle_timeout, transport.keep_alive_interval)?;
+    let idle_timeout = IdleTimeout::try_from(transport.idle_timeout)
+        .map_err(|_| ProtocolError::internal("QUIC idle timeout exceeds protocol maximum"))?;
     transport_config
-        .max_idle_timeout(Some(IdleTimeout::from(VarInt::from_u32(IDLE_TIMEOUT_MS))))
-        .keep_alive_interval(Some(Duration::from_millis(KEEP_ALIVE_MS)));
+        .max_idle_timeout(Some(idle_timeout))
+        .keep_alive_interval(Some(transport.keep_alive_interval));
 
     let recv_window = (transport.max_bytes_bandwidth_per_second / 1000) * transport.expected_rtt_ms;
     let send_window = recv_window;
@@ -1176,4 +1205,22 @@ pub async fn send_command<const HIGH_PRIORITY: bool>(
         lore_warn!("{}: {err}", QuicClientError::Read);
         QuicClientError::Read
     })?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_liveness_profile_is_valid_for_saturated_wan_transfers() {
+        assert!(validate_liveness(DEFAULT_IDLE_TIMEOUT, DEFAULT_KEEP_ALIVE_INTERVAL).is_ok());
+        assert_eq!(DEFAULT_IDLE_TIMEOUT, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn liveness_profile_rejects_missing_or_late_keep_alive() {
+        assert!(validate_liveness(Duration::ZERO, Duration::from_millis(500)).is_err());
+        assert!(validate_liveness(Duration::from_secs(1), Duration::ZERO).is_err());
+        assert!(validate_liveness(Duration::from_secs(1), Duration::from_secs(1)).is_err());
+    }
 }

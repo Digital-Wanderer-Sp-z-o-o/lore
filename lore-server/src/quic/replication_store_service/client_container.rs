@@ -15,6 +15,8 @@ use lore_transport::quic::client::CertificateSettings;
 use lore_transport::quic::client::CongestionAlgorithm;
 use lore_transport::quic::client::ConnectionStats;
 use lore_transport::quic::client::DEFAULT_EXPECTED_RTT_MS;
+use lore_transport::quic::client::DEFAULT_IDLE_TIMEOUT;
+use lore_transport::quic::client::DEFAULT_KEEP_ALIVE_INTERVAL;
 use lore_transport::quic::client::TransportConfig;
 use opentelemetry::KeyValue;
 use tokio::sync::RwLock;
@@ -57,6 +59,8 @@ impl QuicClientFactory {
                 expected_rtt_ms: DEFAULT_EXPECTED_RTT_MS,
                 congestion_algorithm: CongestionAlgorithm::Bbr,
                 initial_cwnd: None,
+                idle_timeout: DEFAULT_IDLE_TIMEOUT,
+                keep_alive_interval: DEFAULT_KEEP_ALIVE_INTERVAL,
             },
             command_behavior: CommandBehavior {
                 message_limit: DEFAULT_CLIENT_MESSAGE_LIMIT,

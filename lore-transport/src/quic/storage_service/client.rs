@@ -34,6 +34,8 @@ use super::super::QuicClientError;
 use super::super::QuicOpCode;
 use super::super::client::AuthAdapter;
 use super::super::client::DEFAULT_EXPECTED_RTT_MS;
+use super::super::client::DEFAULT_IDLE_TIMEOUT;
+use super::super::client::DEFAULT_KEEP_ALIVE_INTERVAL;
 use super::super::client::EndpointConfig;
 use super::super::client::QuicConnection;
 use super::super::client::SendWithReconnectError;
@@ -52,9 +54,23 @@ use crate::error::ProtocolError;
 use crate::quic::client::CongestionAlgorithm;
 use crate::traits::Storage;
 
-const INFLIGHT_COMMAND_LIMIT: usize = 10000;
+// 512 average fragments keep tens of MiB in flight, comfortably above the BDP of
+// expected WAN links, without allowing one checkout to queue thousands of
+// responses and starve other QUIC connections under link saturation.
+const INFLIGHT_COMMAND_LIMIT: usize = 512;
 
 const MAX_BYTES_BANDWIDTH_PER_SEC: u64 = (1024 * 1024 * 1024) / 8;
+
+fn default_transport_config() -> TransportConfig {
+    TransportConfig {
+        max_bytes_bandwidth_per_second: MAX_BYTES_BANDWIDTH_PER_SEC,
+        expected_rtt_ms: DEFAULT_EXPECTED_RTT_MS,
+        congestion_algorithm: CongestionAlgorithm::Bbr,
+        initial_cwnd: None,
+        idle_timeout: DEFAULT_IDLE_TIMEOUT,
+        keep_alive_interval: DEFAULT_KEEP_ALIVE_INTERVAL,
+    }
+}
 
 #[allow(dead_code)]
 pub struct StorageClient {
@@ -130,12 +146,7 @@ impl StorageClient {
             identity: identity.to_string(),
             repository,
         });
-        let transport_config = TransportConfig {
-            max_bytes_bandwidth_per_second: MAX_BYTES_BANDWIDTH_PER_SEC,
-            expected_rtt_ms: DEFAULT_EXPECTED_RTT_MS,
-            congestion_algorithm: CongestionAlgorithm::Bbr,
-            initial_cwnd: None,
-        };
+        let transport_config = default_transport_config();
 
         lore_trace!("QUIC connecting to {remote_url} for repository {repository}");
 
@@ -593,5 +604,19 @@ impl Storage for StorageClient {
 
     async fn close(&self) {
         self.quic.close().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_transport_bounds_inflight_work_and_uses_wan_liveness_defaults() {
+        let transport = default_transport_config();
+
+        assert_eq!(INFLIGHT_COMMAND_LIMIT, 512);
+        assert_eq!(transport.idle_timeout, DEFAULT_IDLE_TIMEOUT);
+        assert_eq!(transport.keep_alive_interval, DEFAULT_KEEP_ALIVE_INTERVAL);
     }
 }
