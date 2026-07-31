@@ -70,6 +70,11 @@ pub struct EndpointConfig {
 
 const HANDSHAKE_TIMEOUT_SECS: u64 = 5;
 pub const DEFAULT_EXPECTED_RTT_MS: u64 = 100;
+/// Maximum wall-clock time for one command after it acquires its client permit.
+/// Keep-alive proves that the QUIC path is alive, but it cannot prove that an
+/// application response still exists. A bounded command timeout forces a clean
+/// reconnect when a response is lost while the transport itself stays healthy.
+pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub const DEFAULT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -490,19 +495,30 @@ where
         };
 
         let epoch = service_client.quic().epoch.load(Ordering::Relaxed);
-        match send_command::<HIGH_PRIORITY>(
-            service_client.quic().clone(),
-            request_type.into(),
-            session_id,
-            service_client.v4_protocol(),
-            &mut chunks(),
+        let opcode = request_type.into();
+        match tokio::time::timeout(
+            DEFAULT_COMMAND_TIMEOUT,
+            send_command::<HIGH_PRIORITY>(
+                service_client.quic().clone(),
+                opcode,
+                session_id,
+                service_client.v4_protocol(),
+                &mut chunks(),
+            ),
         )
         .await
         {
-            Ok(payload) => return Ok((payload, epoch)),
+            Ok(Ok(payload)) => return Ok((payload, epoch)),
+            Err(_elapsed) => {
+                lore_warn!(
+                    "QUIC command {opcode} timed out after {:.2}s; reconnecting",
+                    DEFAULT_COMMAND_TIMEOUT.as_secs_f64()
+                );
+                drop(permit);
+            }
             // error handling for things that cannot be recovered by reconnecting
             // and should be bubbled up to the caller immediately
-            Err(err)
+            Ok(Err(err))
                 if matches!(
                     err,
                     QuicClientError::SlowDown
@@ -515,19 +531,19 @@ where
                     .map_send_error(request_type, SendWithReconnectError::ClientError(err)));
             }
             // error handling for things that should trigger a reconnect
-            Err(QuicClientError::Terminated | QuicClientError::StreamOpen) => {
+            Ok(Err(QuicClientError::Terminated | QuicClientError::StreamOpen)) => {
                 // Fall through to reconnect
                 drop(permit);
             }
             // a non retryable connection error - so just mark as disconnected immediately
-            Err(QuicClientError::CrytpoError) => {
+            Ok(Err(QuicClientError::CrytpoError)) => {
                 return Err(service_client
                     .map_send_error(request_type, SendWithReconnectError::Disconnected));
             }
             // error handling for things that have indicated an error, but the error could
             // be related to something else that triggered a reconnect. We should see if we are
             // reconnecting, and if we are then retry the message again otherwise bubble it up
-            Err(err) => {
+            Ok(Err(err)) => {
                 drop(permit);
 
                 let epoch_current = service_client.quic().epoch.load(Ordering::Relaxed);
@@ -1255,6 +1271,8 @@ mod tests {
     fn default_liveness_profile_is_valid_for_saturated_wan_transfers() {
         assert!(validate_liveness(DEFAULT_IDLE_TIMEOUT, DEFAULT_KEEP_ALIVE_INTERVAL).is_ok());
         assert_eq!(DEFAULT_IDLE_TIMEOUT, Duration::from_secs(300));
+        assert_eq!(DEFAULT_COMMAND_TIMEOUT, Duration::from_secs(120));
+        assert!(DEFAULT_COMMAND_TIMEOUT < DEFAULT_IDLE_TIMEOUT);
     }
 
     #[test]
