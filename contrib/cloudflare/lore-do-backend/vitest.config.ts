@@ -11,7 +11,7 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   plugins: [
     cloudflareTest(() => ({
-      miniflare: { bindings: { AUTH_SHARED_SECRET: "test-secret" } },
+      miniflare: { bindings: { AUTH_SECRET_ACCESS_KEY: "test-secret" } },
       wrangler: { configPath: path.join(projectRoot, "wrangler.jsonc") },
     })),
   ],
