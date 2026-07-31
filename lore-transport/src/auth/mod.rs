@@ -45,7 +45,9 @@ pub mod authentication {
         REGISTER_BUILTIN_AUTHENTICATION.call_once(|| {
             let ucs_auth = Arc::new(ucs_auth::UcsAuthentication);
             let _ = add("ucs-auth", ucs_auth.clone());
-            let _ = add("https", ucs_auth); // transition fallback
+            let _ = add("https", ucs_auth.clone()); // transition fallback
+            #[cfg(debug_assertions)]
+            let _ = add("http", ucs_auth); // loopback-only local development
         });
 
         let scheme = parse_scheme(auth_url)?;

@@ -29,6 +29,9 @@ compatibility gateway with a native Cloudflare backend:
   server before production rollout.
 - Lore's current QUIC/gRPC protocols remain the only client data path. Fragment bytes always pass
   through a Lore Server; there is no custom Cloudflare client data plane.
+- Existing Rendermoon accounts provide identity through a LORE-compatible auth/ReBAC adapter in
+  `rm-api`. Neon stores short login sessions and repository memberships only; it is not in the
+  fragment data path.
 
 The current D1 gateway is useful as a staging proof of concept only. It must not be promoted as the
 50 TB / 80-user production metadata architecture.
@@ -46,9 +49,10 @@ The current D1 gateway is useful as a staging proof of concept only. It must not
   hashes matched. The incremental sync completed in 0.63 seconds for this small smoke fixture.
 - Worker tests cover batch result ordering, mutable CAS contention, atomic lock conflicts, and R2
   immutability. This is smoke/conformance evidence, not the distributed 80-client qualification.
-- The staging server deliberately has JWT disabled. Consequently, two CLI clients are treated as
-  the same anonymous lock owner; a meaningful cross-user lock-contention test is impossible until
-  Lore JWT authentication is enabled. Do not onboard the team while this remains true.
+- The Rendermoon-backed LORE auth adapter and the JWT-enabled Hetzner configuration are implemented
+  locally. Activation and a real two-account lock-contention test are still pending. Do not onboard
+  the team until the deployed flow proves distinct authenticated lock owners and denial for an
+  unassigned user.
 
 ## What changed after the Lore architecture review
 
@@ -77,6 +81,11 @@ The relevant sources of truth are the
 One Lore repository is one partition. The authenticated session, not a client-supplied parameter,
 determines the partition. Knowing a BLAKE3 hash must never be sufficient to read bytes: an exact
 association for the session's partition and requested context must exist.
+
+The current Lore Server authorizer checks whether the repository resource is present in the JWT;
+it does not enforce read versus write permission strings. The Rendermoon adapter therefore exposes
+only `member` and `owner`, not a misleading read-only role. A future read-only product role requires
+operation-scoped checks in Lore Server before it may be advertised or assigned.
 
 Physical payload deduplication may cross partitions, but authorization may not. Any Cloudflare data
 service must check the current association before every payload response. This is why a bearer URL
@@ -134,6 +143,7 @@ R2 packfiles must not leak into the client protocol.
 ```mermaid
 flowchart LR
     C["Lore clients<br/>sparse views + local shared cache"]
+    A["Rendermoon auth adapter<br/>identity + repository grants in Neon"]
     H1["Hetzner Lore Server A<br/>bounded local NVMe cache"]
     H2["Hetzner Lore Server B<br/>add before production"]
     W["Cloudflare control Worker<br/>typed, versioned service API"]
@@ -143,6 +153,9 @@ flowchart LR
     R["Private R2 Standard payload storage<br/>one staging bucket; benchmark 1/4/16"]
 
     C -->|"Lore QUIC/gRPC"| H1
+    C -->|"browser or API-key login"| A
+    H1 -->|"ReBAC permission checks + JWKS"| A
+    H2 -->|"ReBAC permission checks + JWKS"| A
     C -.->|"production failover/load spread"| H2
     H1 -->|"signed batch requests"| W
     H2 -->|"signed batch requests"| W
@@ -387,7 +400,8 @@ separate clone/sync fan-out harness; the chaos client alone is not a bandwidth b
   minor releases.
 - Use least-privilege R2 credentials or Worker bindings scoped to the selected buckets.
 - Rotate service signing keys and keep them out of images and repository files.
-- Enable JWT validation before non-staging access.
+- Keep LORE authorization tokens short-lived and repository-scoped; `.lore/view` is never an ACL.
+- Validate both allowed and denied users after JWT activation and after key rotation.
 - Make schema migrations additive and rolling-deploy compatible.
 - Back up Durable Object state using the platform's recovery facilities and test restore.
 - Monitor shard size, request rate, error type, retry exhaustion, and obliteration completion.
@@ -414,7 +428,8 @@ separate clone/sync fan-out harness; the chaos client alone is not a bandwidth b
 2. What are the real user locations, office/VPN bandwidth, and per-user throughput target?
 3. Does one 1 Gbit/s test server meet normal sparse-sync targets, and does production need 10 Gbit/s
    on one or both servers?
-4. Which identity provider issues Lore JWTs, and how are repository resource grants managed?
+4. Which named Rendermoon accounts receive the initial owner/member grants, and who approves
+   later membership changes?
 5. Do all 80 users legitimately share one partition, or do any directories require linked-repo
    access boundaries?
 6. What local cache budgets and default `.lore/view` templates are assigned to each role?

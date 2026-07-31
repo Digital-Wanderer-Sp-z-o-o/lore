@@ -16,6 +16,16 @@ handler_timeout_seconds = 300
 host = "10.80.0.10"
 request_handler_timeout_seconds = 300
 
+[server.auth]
+jwt_issuer = "https://rendermoon-staging.fly.dev"
+jwt_audience = ["lore-service"]
+
+[server.auth.jwk]
+endpoint = "https://rendermoon-staging.fly.dev/api/v1/lore/auth/jwks.json"
+
+[environment.endpoint]
+auth_url = "https://rendermoon-staging.fly.dev"
+
 [immutable_store]
 mode = "composite"
 
