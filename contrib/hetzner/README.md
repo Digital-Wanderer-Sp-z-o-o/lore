@@ -9,11 +9,11 @@ This directory runs the first scaling baseline from
 - one Hetzner dedicated server terminates stock Lore QUIC/gRPC;
 - a bounded local NVMe store caches immutable fragments and their successful association queries;
 - R2 remains the durable payload store;
-- the existing DynamoDB-compatible D1 gateway is retained only to compare against earlier results;
+- SQLite Durable Objects own immutable metadata, mutable pointers, and lock coordination;
 - there is no custom client data plane and no durable state depends on the Hetzner disk.
 
-Do not ingest the production corpus into this profile. D1 has already returned false not-found
-results under concurrency and is not the target metadata backend.
+Do not ingest the production corpus until the native backend passes the complete correctness,
+failure-injection, and distributed 80-client gates.
 
 ## Server shape
 
@@ -65,9 +65,8 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Fill the four credentials in `.env`. The two R2 values must be bucket-scoped. The AWS access
-key and secret authenticate requests to the staging Worker and must match its configured signing
-credentials; no AWS service is used.
+Fill `LORE_CLOUDFLARE_SHARED_SECRET` in `.env` with the same value installed as the staging
+Worker's `AUTH_SHARED_SECRET`. The server no longer receives R2 or AWS-compatible credentials.
 
 Create the cache root and start Lore:
 
@@ -80,9 +79,10 @@ docker compose logs --tail 100 lore-server
 ```
 
 The Compose service uses host networking so the same port can serve QUIC on UDP and gRPC on TCP.
-`config.toml` selects Lore's native composite store: `/data/cache` is the local tier and the existing
-R2/D1 plugin is the durable tier. Removing the container or cache directory must not remove committed
-data.
+`config.toml` selects Lore's native composite store: `/data/cache` is the local tier and the native
+Cloudflare plugin is the durable tier. The plugin calls a signed, versioned Worker API; the Worker
+uses SQLite Durable Objects and a private R2 binding. Removing the container or cache directory must
+not remove committed data.
 
 ## Scaling test
 
@@ -121,7 +121,7 @@ docker compose logs --since 10m lore-server
 ```
 
 Record aggregate and per-client throughput, p50/p95/p99 completion time, process failures, Lore error
-types, retry counts, server CPU/RAM/disk/network, cache size/hit behavior, D1/Worker errors, and R2
+types, retry counts, server CPU/RAM/disk/network, cache size/hit behavior, DO/Worker errors, and R2
 request/error metrics. Stop increasing concurrency on any false not-found, verification failure,
 corruption, repeated timeout, or sustained resource saturation.
 
@@ -135,7 +135,6 @@ lore-chaos-client parallel -r ./ChaosPlayground --runners 80 --time-limit-mins 6
 ## Promotion gate
 
 This profile can answer whether one Hetzner host, its NVMe cache, and a 1 Gbit/s uplink are adequate
-for normal sparse/delta traffic. It cannot qualify the final backend while D1 remains in the path.
-Production qualification starts after the native Cloudflare store plugin passes the conformance and
-failure-injection gates in `contrib/cloudflare/ARCHITECTURE.md`, and after a second Lore server passes
+for normal sparse/delta traffic. Production qualification still requires the conformance and
+failure-injection gates in `contrib/cloudflare/ARCHITECTURE.md`, plus a second Lore server passing
 host-loss and failover tests.

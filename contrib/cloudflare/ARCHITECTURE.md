@@ -3,7 +3,7 @@
 
 # Archigma Lore on Cloudflare and Hetzner
 
-Status: **proposed; not production-validated**
+Status: **implemented on staging branch; not production-validated**
 
 Last reviewed: **2026-07-31**
 
@@ -123,7 +123,7 @@ flowchart LR
     I["256 immutable metadata DOs<br/>route by hash tail byte"]
     M["Mutable coordinator DOs<br/>catalog + one per partition"]
     L["Deployment lock coordinator DO"]
-    R["Provisional: 16 private R2 Standard buckets<br/>route by hash tail nibble"]
+    R["Private R2 Standard payload storage<br/>one staging bucket; benchmark 1/4/16"]
 
     C -->|"Lore QUIC/gRPC"| H1
     C -.->|"production failover/load spread"| H2
@@ -132,13 +132,14 @@ flowchart LR
     W --> I
     W --> M
     W --> L
-    H1 -->|"cache miss / durable write"| R
-    H2 -->|"cache miss / durable write"| R
+    W -->|"stream fragment payload"| R
 ```
 
 The Worker API is a private service boundary between the derived Lore Server and Cloudflare. It is
-not a DynamoDB emulator. Requests are typed around Lore operations, versioned, bounded, signed,
-and observable.
+not a DynamoDB emulator. Requests are typed around Lore operations, versioned, bounded, HMAC-signed,
+and observable. The current native plugin also streams individual payloads through the stateless
+Worker to its private R2 binding, keeping R2 credentials off the Lore hosts. Benchmark this path
+against direct bucket-scoped S3 access before freezing the production payload route.
 
 ### Immutable metadata routing
 
@@ -146,7 +147,7 @@ Use 256 logical metadata shards from the start:
 
 ```text
 metadata_shard = last_byte(blake3_hash)       # 0..255
-payload_bucket = last_nibble(blake3_hash)     # 0..15
+payload_bucket = mapping_v1(blake3_hash)      # one staging bucket; benchmark 1/4/16
 payload_key    = payloads/v1/<full_hash_hex>
 ```
 
@@ -169,14 +170,13 @@ shard-local and transactional.
 The previous POC performed multiple remote D1 reads for every fragment. A 384 MiB Blender file with
 4,632 fragments therefore generated thousands of high-latency database calls.
 
-The native backend must instead:
+The native backend does instead:
 
 - group `exist_batch` inputs by metadata shard;
-- issue bounded parallel shard requests from the Rust plugin;
+- issue one bounded Worker batch whose internal shard requests run in parallel;
 - return ordered results to Lore;
 - combine exact association and fragment metadata lookup into one shard operation for `get`;
-- avoid unbounded fan-out and apply exponential backoff with jitter;
-- cap concurrency independently for metadata calls and R2 operations.
+- avoid unbounded fan-out (retry/backoff and independent concurrency tuning remain acceptance work).
 
 The initial concurrency values are benchmark inputs, not architecture constants.
 

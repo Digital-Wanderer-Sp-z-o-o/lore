@@ -94,6 +94,8 @@ coverage/
 **/.wrangler/
 .dev.vars
 contrib/cloudflare/lore-d1-gateway/worker-configuration.d.ts
+contrib/cloudflare/lore-do-backend/worker-configuration.d.ts
+contrib/cloudflare/lore-do-backend/dist-do-dry-run/
 eggs
 parts
 var
