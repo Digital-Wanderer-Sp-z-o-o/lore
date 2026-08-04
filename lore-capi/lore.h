@@ -1550,6 +1550,12 @@ typedef struct lore_link_entry_event_data_t {
   struct lore_hash_t revision;
   // Link flags.
   uint32_t flags;
+  // Whether the linked repository state is available in the local store.
+  //
+  // A zero value means the caller can inspect the committed mount metadata,
+  // but the linked content is unavailable or restricted and must not be
+  // traversed.
+  uint8_t content_available;
 } lore_link_entry_event_data_t;
 
 // Data for an event that marks the start of a lock acquire report.

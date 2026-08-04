@@ -4655,14 +4655,13 @@ pub struct LayerMountInfo {
 /// filesystem directory is a link, not a fresh add" with a single linear
 /// `find` instead of an async block-walk per directory.
 ///
-/// Only `target_path` is needed today because the link-mount handling skips
-/// recursion entirely (the link is the parent-tree change; its content is
-/// owned by the linked repository). If we later want the walker to recurse
-/// into a linked state for some operation, extend this struct rather than
-/// re-introducing the per-directory `find_node_link` lookup.
 struct LinkMountInfo {
     /// Parent-relative mount path of the link node (e.g. `"libs/shared"`).
     target_path: String,
+    /// Whether the linked revision is present in the local store and can be
+    /// compared with the filesystem. Restricted thin clones deliberately do
+    /// not contain this state.
+    content_available: bool,
 }
 
 /// Enumerate every link in `state` and resolve its parent-relative mount
@@ -4679,9 +4678,22 @@ async fn collect_link_mounts(
         let target_path = state
             .node_path(repository.clone(), link_ref.local_node as NodeID)
             .await?;
-        mounts.push(LinkMountInfo { target_path });
+        let linked_repository = Arc::new(repository.to_link_context(link_ref.repository).await);
+        let content_available = State::deserialize(linked_repository, link_ref.signature)
+            .await
+            .is_ok();
+        mounts.push(LinkMountInfo {
+            target_path,
+            content_available,
+        });
     }
     Ok(mounts)
+}
+
+fn link_mount_content_unavailable(mounts: &[LinkMountInfo], path: &RelativePath) -> bool {
+    mounts
+        .iter()
+        .any(|mount| mount.target_path == path.as_str() && !mount.content_available)
 }
 
 /// Calculate the set of changes from state to filesystem. Since the file system timestamp tracking
@@ -5905,6 +5917,18 @@ async fn diff_filesystem_directory_walk(
             )
             .await?;
         } else if was_link && is_directory {
+            if link_mount_content_unavailable(&ctx.link_mounts, &item_path) {
+                if ctx.scan_dirty && from_node.is_dirty() {
+                    node_list
+                        .state
+                        .node_clear_dirty(node_list.repository.clone(), from_named_node.node)
+                        .await?;
+                }
+                lore_trace!(
+                    "Skipping filesystem comparison for unavailable or restricted link mount {item_path}"
+                );
+                continue;
+            }
             let link = from_node.linked_node();
             let (link_from, state_from) = link
                 .resolve(ctx.from.repository.clone(), ctx.from.state.clone())
@@ -6093,6 +6117,27 @@ async fn diff_filesystem_directory_walk(
         else {
             continue;
         };
+
+        // A restricted thin clone keeps the committed link node but does not
+        // materialize its directory or linked state. Its absence is therefore
+        // not a filesystem deletion. Clear a stale DirtyDelete left by an
+        // older scan so subsequent stage/commit operations cannot remove the
+        // mount accidentally.
+        if from_node.node.is_link()
+            && link_mount_content_unavailable(&ctx.link_mounts, &from_node.path)
+        {
+            if ctx.scan_dirty && from_node.node.is_dirty() {
+                node_list
+                    .state
+                    .node_clear_dirty(node_list.repository.clone(), from_named_node.node)
+                    .await?;
+            }
+            lore_trace!(
+                "Skipping absent unavailable or restricted link mount {}",
+                from_node.path
+            );
+            continue;
+        }
 
         // Emit deletes only for the materialized portion of the subtree,
         // suppressing directories the filter merely descended through but never
@@ -7927,5 +7972,32 @@ mod tests {
         };
         let parent = BranchId::from([1u8; 16]);
         assert_eq!(link_ref.resolve_branch(parent), own_branch);
+    }
+
+    #[test]
+    fn only_an_unavailable_matching_link_mount_is_opaque_to_filesystem_scan() {
+        let mounts = vec![
+            LinkMountInfo {
+                target_path: "Allowed".to_string(),
+                content_available: true,
+            },
+            LinkMountInfo {
+                target_path: "Denied".to_string(),
+                content_available: false,
+            },
+        ];
+
+        assert!(!link_mount_content_unavailable(
+            &mounts,
+            &RelativePath::new_from_initial_path("Allowed").expect("valid test path")
+        ));
+        assert!(link_mount_content_unavailable(
+            &mounts,
+            &RelativePath::new_from_initial_path("Denied").expect("valid test path")
+        ));
+        assert!(!link_mount_content_unavailable(
+            &mounts,
+            &RelativePath::new_from_initial_path("Missing").expect("valid test path")
+        ));
     }
 }

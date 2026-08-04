@@ -236,13 +236,22 @@ fn handle_link_list(globals: LoreGlobalArgs, args: &LinkListArgs) -> u8 {
                     data.link_path,
                     data.link_node
                 );
-                println!(
-                    "  {}Source path:{} {} (node {})",
-                    CommonStyles::HEADERS,
-                    anstyle::Reset,
-                    data.source_path,
-                    data.source_node
-                );
+                if data.content_available != 0 {
+                    println!(
+                        "  {}Source path:{} {} (node {})",
+                        CommonStyles::HEADERS,
+                        anstyle::Reset,
+                        data.source_path,
+                        data.source_node
+                    );
+                } else {
+                    println!(
+                        "  {}Source path:{} unavailable or restricted (node {})",
+                        CommonStyles::HEADERS,
+                        anstyle::Reset,
+                        data.source_node
+                    );
+                }
                 let branch_name = data.branch_name.to_string();
                 let branch_id = data.branch.to_string();
                 if !branch_name.is_empty() && branch_name != branch_id {
