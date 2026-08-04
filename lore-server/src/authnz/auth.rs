@@ -17,9 +17,8 @@ use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 use tonic::codegen::InterceptedService;
-use tonic::transport::ClientTlsConfig;
 
-use crate::grpc::ServerResultExt;
+use crate::authnz::common::connect_auth_channel;
 
 type LoreAuthApiResult<T> = Result<Response<T>, Status>;
 
@@ -29,21 +28,7 @@ pub struct LoreAuthClientHelper {
 
 impl LoreAuthClientHelper {
     async fn new(auth_url: String) -> Result<LoreAuthClientHelper, Status> {
-        let mut endpoint = tonic::transport::Endpoint::from_shared(auth_url.clone())
-            .warn_map_err(|_| Status::internal("Failed to create lore auth endpoint"))?;
-        if auth_url.starts_with("https://") {
-            endpoint = endpoint
-                .tls_config(
-                    ClientTlsConfig::new()
-                        .assume_http2(true)
-                        .with_native_roots(),
-                )
-                .warn_map_err(|_| Status::internal("Failed to configure TLS for lore auth"))?;
-        }
-        let channel = endpoint
-            .connect()
-            .await
-            .warn_map_err(|_| Status::internal("Failed to connect to lore auth service"))?;
+        let channel = connect_auth_channel(&auth_url).await?;
         let client = UrcAuthApiClient::with_interceptor(channel, CorrelationInterceptor);
         Ok(LoreAuthClientHelper { client })
     }
