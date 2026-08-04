@@ -46,29 +46,24 @@ pub async fn list(repository: Arc<RepositoryContext>) -> Result<(), LinkError> {
             .await
             .forward::<LinkError>("Specified node is not a link node")?;
 
-        let link_state = State::deserialize(link.clone(), link_reference.signature)
-            .await
-            .forward::<LinkError>("Failed deserializing state node block")?;
-
-        let source_path = link_state
-            .node_path(link.clone(), local_node.child)
-            .await
-            .forward::<LinkError>("Failed resolving link node")?;
-
-        let source_path = if source_path.is_empty() {
-            String::from("/")
-        } else {
-            source_path
-        };
-
         let resolved_branch = link_reference.resolve_branch(parent_branch);
-
-        let branch_name =
-            if let Ok(metadata) = branch::metadata(link.clone(), resolved_branch).await {
-                branch::name(&metadata).unwrap_or_default().to_string()
-            } else {
-                String::new()
-            };
+        let details = resolve_link_details(
+            link.clone(),
+            link_reference.signature,
+            local_node.child,
+            resolved_branch,
+        )
+        .await;
+        let (source_path, branch_name, content_available) = match details {
+            Ok(details) => (details.source_path, details.branch_name, true),
+            Err(error) => {
+                lore_warn!(
+                    "Linked repository {} content is unavailable or restricted; listing mount metadata only: {error}",
+                    link_reference.repository,
+                );
+                (String::new(), String::new(), false)
+            }
+        };
 
         event::LoreEvent::LinkEntry(LoreLinkEntryEventData {
             link: link_reference.repository,
@@ -80,11 +75,46 @@ pub async fn list(repository: Arc<RepositoryContext>) -> Result<(), LinkError> {
             branch_name: LoreString::from(branch_name.as_str()),
             revision: link_reference.signature,
             flags: link_reference.flags,
+            content_available: content_available.into(),
         })
         .send();
     }
 
     Ok(())
+}
+
+struct LinkDetails {
+    source_path: String,
+    branch_name: String,
+}
+
+async fn resolve_link_details(
+    link: Arc<RepositoryContext>,
+    revision: crate::lore::Hash,
+    source_node: NodeID,
+    branch_id: crate::lore::BranchId,
+) -> Result<LinkDetails, LinkError> {
+    let link_state = State::deserialize(link.clone(), revision)
+        .await
+        .forward::<LinkError>("Failed deserializing linked repository state")?;
+    let source_path = link_state
+        .node_path(link.clone(), source_node)
+        .await
+        .forward::<LinkError>("Failed resolving linked source node")?;
+    let source_path = if source_path.is_empty() {
+        String::from("/")
+    } else {
+        source_path
+    };
+    let branch_name = if let Ok(metadata) = branch::metadata(link, branch_id).await {
+        branch::name(&metadata).unwrap_or_default().to_string()
+    } else {
+        String::new()
+    };
+    Ok(LinkDetails {
+        source_path,
+        branch_name,
+    })
 }
 
 /// Data for an event describing a link that has staged changes.

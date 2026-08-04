@@ -35,10 +35,12 @@ use crate::lore::Hash;
 use crate::lore::RepositoryId;
 use crate::lore::execution_context;
 use crate::lore_debug;
+use crate::lore_warn;
 use crate::repository;
 use crate::repository::RepositoryContext;
 use crate::repository::RepositoryWriteToken;
 use crate::state;
+use crate::state::LinkReference;
 use crate::state::State;
 use crate::store;
 use crate::util::serde::u8_as_bool;
@@ -684,6 +686,14 @@ async fn collect_fragments_and_push(
             .await
             .forward::<PushError>("deserializing revision state")?;
 
+        let link_parent_state = State::deserialize(repository.clone(), state.parent_self())
+            .await
+            .forward::<PushError>("deserializing parent state")?;
+        let parent_links = link_parent_state
+            .link_list(repository.clone())
+            .await
+            .unwrap_or_default();
+
         // Push links
         if let Ok(link_list) = state.link_list(repository.clone()).await {
             // TODO(vri): UCS-17135 - Push links in individual tasks
@@ -691,9 +701,15 @@ async fn collect_fragments_and_push(
                 let link_id = link_reference.repository;
                 let link_repository = Arc::new(repository.to_link_context(link_id).await);
                 let link_signature = link_reference.signature;
-                let link_state = State::deserialize(link_repository.clone(), link_signature)
-                    .await
-                    .forward::<PushError>("deserializing link state")?;
+                let Some(link_state) = link_state_for_push(
+                    link_repository.clone(),
+                    link_reference,
+                    parent_links.as_slice(),
+                )
+                .await?
+                else {
+                    continue;
+                };
 
                 let link_branch_id = link_reference.resolve_branch(branch);
 
@@ -748,7 +764,8 @@ async fn collect_fragments_and_push(
             .send();
         }
 
-        // Load parent state
+        // Re-read after a possible rebase so fragment collection uses the
+        // effective parent rather than the original local history parent.
         let state_parent = State::deserialize(repository.clone(), state.parent_self())
             .await
             .forward::<PushError>("deserializing parent state")?;
@@ -999,6 +1016,58 @@ async fn collect_fragments_and_push(
     }
 
     Ok(())
+}
+
+async fn link_state_for_push(
+    link_repository: Arc<RepositoryContext>,
+    link_reference: &LinkReference,
+    parent_links: &[LinkReference],
+) -> Result<Option<Arc<State>>, PushError> {
+    match State::deserialize(link_repository, link_reference.signature).await {
+        Ok(state) => Ok(Some(state)),
+        Err(error) if link_target_was_already_referenced(parent_links, link_reference) => {
+            lore_warn!(
+                "Skipping unchanged linked repository {} at revision {} because its content is unavailable or restricted: {error}",
+                link_reference.repository,
+                link_reference.signature,
+            );
+            Ok(None)
+        }
+        Err(error) => Err(PushError::internal_with_context(
+            error,
+            "deserializing new or changed link state",
+        )),
+    }
+}
+
+fn link_target_was_already_referenced(
+    parent_links: &[LinkReference],
+    current: &LinkReference,
+) -> bool {
+    parent_links.iter().any(|parent| {
+        parent.repository == current.repository
+            && parent.branch == current.branch
+            && parent.signature == current.signature
+    })
+}
+
+#[cfg(test)]
+mod link_push_tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn only_an_unchanged_link_target_can_skip_unavailable_content() {
+        let parent = LinkReference::default();
+        let unchanged = parent;
+        let mut changed = parent;
+        changed.signature =
+            Hash::from_str(&"1".repeat(64)).expect("test signature should be valid");
+
+        assert!(link_target_was_already_referenced(&[parent], &unchanged));
+        assert!(!link_target_was_already_referenced(&[parent], &changed));
+    }
 }
 
 fn collect_fragments_and_push_recurse(
