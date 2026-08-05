@@ -7,6 +7,7 @@ use lore_macro::LoreArgs;
 use lore_revision::interface::LoreEventCallback;
 use lore_revision::interface::LoreGlobalArgs;
 use lore_revision::layer::LayerError;
+pub use lore_revision::layer::LoreLayerRecoveryOperation;
 use lore_revision::repository::RepositoryContext;
 use lore_revision::repository::RepositoryWriteToken;
 use lore_revision::util::path::RelativePath;
