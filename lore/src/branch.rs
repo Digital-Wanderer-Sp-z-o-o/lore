@@ -856,6 +856,38 @@ pub async fn push(
     dispatch_call(globals, args, callback, push_local).await
 }
 
+/// Emits the same recursive [`LoreEvent::BranchPush`](crate::interface::LoreEvent::BranchPush)
+/// unit plan as [`push`] without changing local or remote repository state.
+///
+/// This call always executes against the caller's local working-copy metadata
+/// and opens the repository read-only. Other progress events may be emitted as
+/// LORE inspects fragment availability, but no fragments or branch pointers are
+/// written.
+pub async fn push_preview(
+    globals: LoreGlobalArgs,
+    args: LoreBranchPushArgs,
+    callback: LoreEventCallback,
+) -> i32 {
+    repository_call_read(
+        globals,
+        callback,
+        args,
+        push_preview,
+        |repository, args| async move {
+            repository
+                .remote()
+                .await
+                .forward::<branch::push::PushError>("acquiring remote")?;
+            let options = PushOptions {
+                branch: args.branch.into(),
+                fast_forward_merge: args.fast_forward_merge != 0,
+            };
+            branch::push::preview(repository, options).await
+        },
+    )
+    .await
+}
+
 async fn push_local(
     globals: LoreGlobalArgs,
     args: LoreBranchPushArgs,

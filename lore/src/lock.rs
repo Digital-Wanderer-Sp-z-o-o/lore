@@ -177,6 +177,18 @@ pub struct LoreLockFileQueryArgs {
     pub path: LoreString,
 }
 
+/// Arguments for querying locks in a linked or layered repository available
+/// through the current root working copy.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoreLockFileRelatedQueryArgs {
+    pub repository: lore_revision::lore::RepositoryId,
+    pub kind: crate::repository::LoreRelatedRepositoryKind,
+    pub branch: LoreString,
+    pub owner: LoreString,
+    pub path: LoreString,
+}
+
 /// Queries file locks on a branch, optionally filtered by owner and path.
 ///
 /// # Events
@@ -204,6 +216,32 @@ pub async fn file_query(
     callback: LoreEventCallback,
 ) -> i32 {
     dispatch_call(globals, args, callback, file_query_local).await
+}
+
+/// Queries file locks in a related repository context while keeping the root
+/// working copy read-only.
+pub async fn file_query_related(
+    globals: LoreGlobalArgs,
+    args: LoreLockFileRelatedQueryArgs,
+    callback: LoreEventCallback,
+) -> i32 {
+    repository_call_read(
+        globals,
+        callback,
+        args,
+        file_query_related,
+        |root, args| async move {
+            let repository =
+                crate::repository::related_context(&root, args.repository, args.kind).await;
+            let options = QueryOptions {
+                branch: args.branch.to_string(),
+                owner: args.owner.to_string(),
+                path: args.path.to_string(),
+            };
+            lore_revision::lock::file::query::query(repository, options).await
+        },
+    )
+    .await
 }
 
 async fn file_query_local(

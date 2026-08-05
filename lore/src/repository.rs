@@ -43,6 +43,27 @@ use crate::util::convert_user_paths;
 use crate::util::log_command_done;
 use crate::util::log_command_info;
 
+/// Selects how a related repository shares the root working-copy stores.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoreRelatedRepositoryKind {
+    Link,
+    Layer,
+}
+
+pub(crate) async fn related_context(
+    root: &RepositoryContext,
+    repository_id: RepositoryId,
+    kind: LoreRelatedRepositoryKind,
+) -> Arc<RepositoryContext> {
+    let context = match kind {
+        LoreRelatedRepositoryKind::Link => root.to_link_context(repository_id).await,
+        LoreRelatedRepositoryKind::Layer => root.to_layer_context(repository_id).await,
+    };
+    Arc::new(context)
+}
+
 /// Arguments for cloning a remote repository to the local path.
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, LoreArgs)]
