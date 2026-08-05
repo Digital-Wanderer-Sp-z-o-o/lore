@@ -5,10 +5,13 @@ use lore_revision::interface::LoreArray;
 use lore_revision::interface::LoreGlobalArgs;
 use lore_revision::lock::file::acquire::AcquireOptions;
 use lore_revision::lock::file::query::QueryOptions;
+use lore_revision::lock::file::recovery_audit::RecoveryAuditError;
+use lore_revision::lock::file::recovery_audit::RecoveryAuditOptions;
 use lore_revision::lock::file::release::ReleaseOptions;
 use lore_revision::lock::file::status::StatusOptions;
 use serde::Deserialize;
 use serde::Serialize;
+use uuid::Uuid;
 
 use crate::call::repository_call_read;
 use crate::call_delegation::dispatch_call;
@@ -265,6 +268,74 @@ async fn file_query_local(
         },
     )
     .await
+}
+
+/// Arguments for reading one page of the durable administrative lock-recovery audit.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, LoreArgs)]
+#[handler(recovery_audit_query_local)]
+pub struct LoreLockRecoveryAuditQueryArgs {
+    /// Number of events to return, from 1 through 100.
+    pub limit: u32,
+    /// Event UUID returned by the previous page, or empty for the first page.
+    pub cursor_event_id: LoreString,
+    /// Millisecond timestamp returned with the previous page cursor, or zero for the first page.
+    pub cursor_recorded_at: u64,
+}
+
+/// Reads one page of durable administrative lock-recovery history.
+pub async fn recovery_audit_query(
+    globals: LoreGlobalArgs,
+    args: LoreLockRecoveryAuditQueryArgs,
+    callback: LoreEventCallback,
+) -> i32 {
+    dispatch_call(globals, args, callback, recovery_audit_query_local).await
+}
+
+async fn recovery_audit_query_local(
+    globals: LoreGlobalArgs,
+    args: LoreLockRecoveryAuditQueryArgs,
+    callback: LoreEventCallback,
+) -> i32 {
+    repository_call_read(
+        globals,
+        callback,
+        args,
+        recovery_audit_query,
+        move |repository, args| async move {
+            let options = recovery_audit_options(args)?;
+            lore_revision::lock::file::recovery_audit::query(repository, options).await
+        },
+    )
+    .await
+}
+
+fn recovery_audit_options(
+    args: LoreLockRecoveryAuditQueryArgs,
+) -> Result<RecoveryAuditOptions, RecoveryAuditError> {
+    let cursor = if args.cursor_event_id.is_empty() {
+        if args.cursor_recorded_at != 0 {
+            return Err(lore_base::error::InvalidArguments {
+                reason: "lock recovery audit cursor timestamp requires an event ID".into(),
+            }
+            .into());
+        }
+        None
+    } else {
+        let event_id = Uuid::parse_str(args.cursor_event_id.as_str()).map_err(|_| {
+            RecoveryAuditError::from(lore_base::error::InvalidArguments {
+                reason: "lock recovery audit cursor event ID must be a UUID".into(),
+            })
+        })?;
+        Some(lore_base::types::LockRecoveryAuditCursor::new(
+            event_id,
+            args.cursor_recorded_at,
+        ))
+    };
+    Ok(RecoveryAuditOptions {
+        limit: args.limit,
+        cursor,
+    })
 }
 
 /// Arguments for releasing file locks on the given paths for a branch and owner.

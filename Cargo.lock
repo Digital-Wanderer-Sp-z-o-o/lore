@@ -2603,6 +2603,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
  "zerocopy",
 ]
 
@@ -2965,6 +2966,7 @@ dependencies = [
  "tonic",
  "tower",
  "url",
+ "uuid",
  "zerocopy",
 ]
 

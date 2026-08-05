@@ -5,6 +5,9 @@ use std::time::Duration;
 
 use lore_base::error::InvalidArguments;
 use lore_base::runtime::LORE_CONTEXT;
+use lore_base::types::LockRecoveryAuditCursor;
+use lore_base::types::LockRecoveryAuditEntry;
+use lore_base::types::LockRecoveryAuditQuery;
 use lore_base::types::LockResource;
 use lore_proto::LockService;
 use lore_proto::lock::AdminLockRequest;
@@ -13,6 +16,10 @@ use lore_proto::lock::LockRequest;
 use lore_proto::lock::LockResponse;
 use lore_proto::lock::QueryRequest;
 use lore_proto::lock::QueryResponse;
+use lore_proto::lock::RecoveryAuditCursor;
+use lore_proto::lock::RecoveryAuditEntry;
+use lore_proto::lock::RecoveryAuditRequest;
+use lore_proto::lock::RecoveryAuditResponse;
 use lore_proto::lock::StatusRequest;
 use lore_proto::lock::StatusResponse;
 use lore_proto::lock::UnlockRequest;
@@ -92,6 +99,7 @@ fn handle_lock_error(error: LockError) -> Status {
     match error {
         LockError::LockNotFound(_) => Status::not_found(error.to_string()),
         LockError::LockNotOwned(_) => Status::failed_precondition(error.to_string()),
+        LockError::NotSupported(_) => Status::unimplemented(error.to_string()),
         LockError::SlowDown(_) => Status::resource_exhausted(error.to_string()),
         LockError::InvalidArguments(_) => Status::invalid_argument(error.to_string()),
         LockError::Internal(_) => {
@@ -329,16 +337,26 @@ impl LoreLockService {
 
         LORE_CONTEXT
             .scope(execution, async move {
-                let resources = self
-                    .lock_store
-                    .unlock_resources(
-                        user_id.as_str(),
-                        expected_owner.as_str(),
-                        repository,
-                        &resources,
-                    )
-                    .await
-                    .map_err(handle_lock_error)?;
+                let resources = if expected_owner == user_id {
+                    self.lock_store
+                        .unlock_resources(
+                            user_id.as_str(),
+                            expected_owner.as_str(),
+                            repository,
+                            &resources,
+                        )
+                        .await
+                } else {
+                    self.lock_store
+                        .recover_resources(
+                            user_id.as_str(),
+                            expected_owner.as_str(),
+                            repository,
+                            &resources,
+                        )
+                        .await
+                }
+                .map_err(handle_lock_error)?;
 
                 info!(
                     actor_id = %user_id,
@@ -358,6 +376,40 @@ impl LoreLockService {
 
                 Ok(Response::new(UnlockResponse {
                     resources: resources.into_iter().map(Into::into).collect(),
+                }))
+            })
+            .await
+    }
+
+    async fn handle_query_recovery_audit(
+        &self,
+        request: Request<RecoveryAuditRequest>,
+    ) -> Result<Response<RecoveryAuditResponse>, Status> {
+        let user_id = get_user_id(request.extensions());
+        let repository = get_repository(request.metadata())?;
+        if !is_owner_or_admin(request.extensions(), repository) {
+            return Err(Status::permission_denied(
+                "Only a repository administrator can read lock recovery audit history",
+            ));
+        }
+        let correlation_id = extract_correlation_id(&request).unwrap_or_default();
+        let query = recovery_audit_query(request.into_inner())?;
+        let execution = setup_execution(module_path!(), correlation_id, user_id);
+
+        LORE_CONTEXT
+            .scope(execution, async move {
+                let page = self
+                    .lock_store
+                    .query_recovery_audit(repository, &query)
+                    .await
+                    .map_err(handle_lock_error)?;
+                Ok(Response::new(RecoveryAuditResponse {
+                    events: page
+                        .entries()
+                        .iter()
+                        .map(recovery_audit_entry_proto)
+                        .collect(),
+                    next_cursor: page.next_cursor().map(recovery_audit_cursor_proto),
                 }))
             })
             .await
@@ -443,6 +495,71 @@ impl LockService for LoreLockService {
     ) -> Result<Response<AdminLockResponse>, Status> {
         timeout_grpc(self.rpc_timeout, self.handle_admin_lock(request)).await
     }
+
+    #[tracing::instrument(name = "LoreLockService::query_recovery_audit", skip_all)]
+    async fn query_recovery_audit(
+        &self,
+        request: Request<RecoveryAuditRequest>,
+    ) -> Result<Response<RecoveryAuditResponse>, Status> {
+        timeout_grpc(self.rpc_timeout, self.handle_query_recovery_audit(request)).await
+    }
+}
+
+fn recovery_audit_query(request: RecoveryAuditRequest) -> Result<LockRecoveryAuditQuery, Status> {
+    let cursor = request
+        .cursor
+        .map(|cursor| -> Result<LockRecoveryAuditCursor, Status> {
+            let event_id = uuid::Uuid::from_slice(&cursor.event_id)
+                .map_err(|_| Status::invalid_argument("audit cursor event ID must be a UUID"))?;
+            let recorded_at = timestamp_millis(cursor.recorded_at.as_ref(), "audit cursor")?;
+            Ok(LockRecoveryAuditCursor::new(event_id, recorded_at))
+        })
+        .transpose()?;
+    LockRecoveryAuditQuery::try_new(request.limit, cursor)
+        .map_err(|error| handle_lock_error(error.into()))
+}
+
+fn recovery_audit_entry_proto(entry: &LockRecoveryAuditEntry) -> RecoveryAuditEntry {
+    RecoveryAuditEntry {
+        event_id: entry.event_id().as_bytes().to_vec().into(),
+        actor: entry.actor_id().to_owned(),
+        expected_owner: entry.expected_owner_id().to_owned(),
+        resources: entry.resources().iter().map(Into::into).collect(),
+        recorded_at: Some(timestamp_proto(entry.recorded_at())),
+    }
+}
+
+fn recovery_audit_cursor_proto(cursor: &LockRecoveryAuditCursor) -> RecoveryAuditCursor {
+    RecoveryAuditCursor {
+        event_id: cursor.event_id().as_bytes().to_vec().into(),
+        recorded_at: Some(timestamp_proto(cursor.recorded_at())),
+    }
+}
+
+fn timestamp_proto(milliseconds: u64) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: (milliseconds / 1_000) as i64,
+        nanos: ((milliseconds % 1_000) * 1_000_000) as i32,
+    }
+}
+
+fn timestamp_millis(
+    timestamp: Option<&prost_types::Timestamp>,
+    field: &str,
+) -> Result<u64, Status> {
+    let timestamp = timestamp
+        .ok_or_else(|| Status::invalid_argument(format!("{field} timestamp is required")))?;
+    if timestamp.seconds < 0 || !(0..1_000_000_000).contains(&timestamp.nanos) {
+        return Err(Status::invalid_argument(format!(
+            "{field} timestamp is invalid"
+        )));
+    }
+    let seconds = u64::try_from(timestamp.seconds)
+        .map_err(|_| Status::invalid_argument(format!("{field} timestamp is invalid")))?;
+    seconds
+        .checked_mul(1_000)
+        .and_then(|value| value.checked_add(timestamp.nanos as u64 / 1_000_000))
+        .ok_or_else(|| Status::invalid_argument(format!("{field} timestamp is out of range")))
 }
 
 #[cfg(test)]
@@ -450,6 +567,9 @@ mod test {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use lore_base::types::LockRecoveryAuditEntry;
+    use lore_base::types::LockRecoveryAuditPage;
+    use lore_base::types::LockResource;
     use lore_proto::LockService;
     use lore_revision::lore::RepositoryId;
     use lore_transport::grpc::REPOSITORY_ID_KEY;
@@ -459,9 +579,36 @@ mod test {
 
     use crate::grpc::lock_service::{LoreLockService, resolve_expected_unlock_owner};
 
+    fn authorize<T>(
+        request: &mut Request<T>,
+        repository: RepositoryId,
+        user_id: &str,
+        permissions: &[&str],
+    ) {
+        use crate::auth::jwt::{AuthorizationToken, ResourcePermission};
+
+        request.metadata_mut().insert_bin(
+            REPOSITORY_ID_KEY,
+            tonic::metadata::BinaryMetadataValue::from_bytes(repository.data()),
+        );
+        request.extensions_mut().insert(AuthorizationToken {
+            user_id: user_id.to_owned(),
+            resources: Some(vec![ResourcePermission {
+                resource_id: format!("urc-{repository}"),
+                permission: permissions
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect(),
+            }]),
+            ..Default::default()
+        });
+    }
+
     mod store {
         use async_trait::async_trait;
         use lore_base::types::LockData;
+        use lore_base::types::LockRecoveryAuditPage;
+        use lore_base::types::LockRecoveryAuditQuery;
         use lore_base::types::LockResource;
         use lore_revision::lock::LockError;
         use lore_revision::lock::LockQuery;
@@ -497,6 +644,20 @@ mod test {
                     repository: RepositoryId,
                     resources: &[LockResource],
                 ) -> Result<Vec<LockResource>, LockError>;
+
+                async fn recover_resources(
+                    &self,
+                    actor_id: &str,
+                    expected_owner_id: &str,
+                    repository: RepositoryId,
+                    resources: &[LockResource],
+                ) -> Result<Vec<LockResource>, LockError>;
+
+                async fn query_recovery_audit(
+                    &self,
+                    repository: RepositoryId,
+                    query: &LockRecoveryAuditQuery,
+                ) -> Result<LockRecoveryAuditPage, LockError>;
             }
         }
     }
@@ -524,6 +685,83 @@ mod test {
         fn rejects_a_foreign_owner_for_an_ordinary_member() {
             let error = resolve_expected_unlock_owner("member", Some("artist"), false).unwrap_err();
             assert_eq!(error.code(), Code::PermissionDenied);
+        }
+    }
+
+    mod recovery_audit {
+        use lore_proto::lock::RecoveryAuditRequest;
+        use uuid::Uuid;
+
+        use super::*;
+        use crate::notification::local::NotificationSender;
+
+        #[tokio::test]
+        async fn ordinary_member_cannot_read_recovery_audit() {
+            let lock_store = super::store::MockMockLockStore::new();
+            let lock_service = LoreLockService::new(
+                Arc::new(lock_store),
+                Arc::new(NotificationSender::default()),
+                Duration::from_secs(60),
+            );
+            let repository = random::<RepositoryId>();
+            let mut request = Request::new(RecoveryAuditRequest {
+                limit: 25,
+                cursor: None,
+            });
+            authorize(&mut request, repository, "member", &["read"]);
+
+            let error = lock_service
+                .query_recovery_audit(request)
+                .await
+                .expect_err("ordinary members must not read the administrative audit");
+
+            assert_eq!(error.code(), Code::PermissionDenied);
+        }
+
+        #[tokio::test]
+        async fn repository_admin_receives_typed_recovery_audit_page() {
+            let event_id = Uuid::new_v4();
+            let resource = LockResource {
+                description: "interiors/unit-01/scene.blend".into(),
+                ..Default::default()
+            };
+            let entry = LockRecoveryAuditEntry::try_new(
+                event_id,
+                "admin".into(),
+                "artist".into(),
+                vec![resource],
+                1_725_000_000_123,
+            )
+            .unwrap();
+            let mut lock_store = super::store::MockMockLockStore::new();
+            lock_store
+                .expect_query_recovery_audit()
+                .withf(|_, query| query.limit() == 25 && query.cursor().is_none())
+                .return_once(move |_, _| Ok(LockRecoveryAuditPage::new(vec![entry], None)));
+            let lock_service = LoreLockService::new(
+                Arc::new(lock_store),
+                Arc::new(NotificationSender::default()),
+                Duration::from_secs(60),
+            );
+            let repository = random::<RepositoryId>();
+            let mut request = Request::new(RecoveryAuditRequest {
+                limit: 25,
+                cursor: None,
+            });
+            authorize(&mut request, repository, "admin", &["admin"]);
+
+            let response = lock_service
+                .query_recovery_audit(request)
+                .await
+                .expect("repository admin should read the audit")
+                .into_inner();
+
+            assert_eq!(response.events.len(), 1);
+            assert_eq!(response.events[0].event_id.as_ref(), event_id.as_bytes());
+            assert_eq!(response.events[0].actor, "admin");
+            assert_eq!(response.events[0].expected_owner, "artist");
+            assert_eq!(response.events[0].resources.len(), 1);
+            assert!(response.next_cursor.is_none());
         }
     }
 
@@ -750,6 +988,45 @@ mod test {
                 .expect_err("Unlock did not return error status");
 
             assert_eq!(error_status.code(), Code::FailedPrecondition);
+        }
+
+        #[tokio::test]
+        async fn admin_foreign_unlock_uses_atomic_recovery_store_path() {
+            let resource = Resource {
+                branch: Default::default(),
+                hash: Default::default(),
+                description: "interiors/unit-01/scene.blend".into(),
+            };
+            let mut lock_store = super::store::MockMockLockStore::new();
+            lock_store.expect_unlock_resources().never();
+            lock_store
+                .expect_recover_resources()
+                .withf(|actor, owner, _, resources| {
+                    actor == "admin"
+                        && owner == "artist"
+                        && resources.len() == 1
+                        && resources[0].description == "interiors/unit-01/scene.blend"
+                })
+                .return_once(|_, _, _, resources| Ok(resources.to_vec()));
+            let lock_service = LoreLockService::new(
+                Arc::new(lock_store),
+                Arc::new(NotificationSender::default()),
+                Duration::from_secs(60),
+            );
+            let repository = random::<RepositoryId>();
+            let mut request = Request::new(UnlockRequest {
+                resources: vec![resource],
+                expected_owner: Some("artist".into()),
+            });
+            authorize(&mut request, repository, "admin", &["admin"]);
+
+            let response = lock_service
+                .unlock(request)
+                .await
+                .expect("repository admin should recover a foreign lock")
+                .into_inner();
+
+            assert_eq!(response.resources.len(), 1);
         }
     }
 }

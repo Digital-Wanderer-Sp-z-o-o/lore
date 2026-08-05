@@ -3,10 +3,14 @@
 
 use async_trait::async_trait;
 use lore_base::error::{InvalidArguments, LockNotFound, LockNotOwned, SlowDown};
-use lore_base::types::{BranchId, Hash, LockData, LockResource, RepositoryId};
+use lore_base::types::{
+    BranchId, Hash, LockData, LockRecoveryAuditCursor, LockRecoveryAuditEntry,
+    LockRecoveryAuditPage, LockRecoveryAuditQuery, LockResource, RepositoryId,
+};
 use lore_revision::lock::{LockError, LockQuery, LockStore};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{CloudflareClient, CloudflareClientError};
 
@@ -17,6 +21,34 @@ pub struct CloudflareLockStore {
 impl CloudflareLockStore {
     pub fn new(client: CloudflareClient) -> Self {
         Self { client }
+    }
+
+    async fn release_resources(
+        &self,
+        actor_id: &str,
+        expected_owner_id: &str,
+        repository: RepositoryId,
+        resources: &[LockResource],
+    ) -> Result<Vec<LockResource>, LockError> {
+        let response: LockMutationResponse = self
+            .client
+            .post(
+                "/v1/locks/release",
+                &ReleaseRequest {
+                    actor: actor_id,
+                    expected_owner: expected_owner_id,
+                    repository,
+                    resources: resources.iter().map(LockResourceDto::from).collect(),
+                },
+            )
+            .await
+            .map_err(lock_error)?;
+        Ok(response
+            .resources
+            .unwrap_or_default()
+            .into_iter()
+            .map(LockResource::from)
+            .collect())
     }
 }
 
@@ -89,25 +121,39 @@ impl LockStore for CloudflareLockStore {
         repository: RepositoryId,
         resources: &[LockResource],
     ) -> Result<Vec<LockResource>, LockError> {
-        let response: LockMutationResponse = self
+        self.release_resources(actor_id, expected_owner_id, repository, resources)
+            .await
+    }
+
+    async fn recover_resources(
+        &self,
+        actor_id: &str,
+        expected_owner_id: &str,
+        repository: RepositoryId,
+        resources: &[LockResource],
+    ) -> Result<Vec<LockResource>, LockError> {
+        self.release_resources(actor_id, expected_owner_id, repository, resources)
+            .await
+    }
+
+    async fn query_recovery_audit(
+        &self,
+        repository: RepositoryId,
+        query: &LockRecoveryAuditQuery,
+    ) -> Result<LockRecoveryAuditPage, LockError> {
+        let response: RecoveryAuditPageDto = self
             .client
             .post(
-                "/v1/locks/release",
-                &ReleaseRequest {
-                    actor: actor_id,
-                    expected_owner: expected_owner_id,
+                "/v1/locks/recovery-audit",
+                &RecoveryAuditRequest {
                     repository,
-                    resources: resources.iter().map(LockResourceDto::from).collect(),
+                    limit: query.limit(),
+                    cursor: query.cursor().map(RecoveryAuditCursorDto::from),
                 },
             )
             .await
             .map_err(lock_error)?;
-        Ok(response
-            .resources
-            .unwrap_or_default()
-            .into_iter()
-            .map(LockResource::from)
-            .collect())
+        recovery_audit_page(repository, query, response)
     }
 }
 
@@ -194,6 +240,49 @@ struct StatusRequest {
 #[derive(Serialize)]
 struct QueryRequest {
     query: LockQueryDto,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryAuditRequest {
+    repository: RepositoryId,
+    limit: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<RecoveryAuditCursorDto>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryAuditCursorDto {
+    recorded_at: u64,
+    event_id: String,
+}
+
+impl From<&LockRecoveryAuditCursor> for RecoveryAuditCursorDto {
+    fn from(value: &LockRecoveryAuditCursor) -> Self {
+        Self {
+            recorded_at: value.recorded_at(),
+            event_id: value.event_id().to_string(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryAuditEntryDto {
+    event_id: String,
+    actor: String,
+    expected_owner: String,
+    repository: RepositoryId,
+    resources: Vec<LockResourceDto>,
+    recorded_at: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryAuditPageDto {
+    events: Vec<RecoveryAuditEntryDto>,
+    next_cursor: Option<RecoveryAuditCursorDto>,
 }
 
 #[derive(Deserialize)]
@@ -308,6 +397,72 @@ fn lock_error(error: CloudflareClientError) -> LockError {
         CloudflareClientError::Transport(_) => SlowDown.into(),
         _ => LockError::internal(format!("Cloudflare lock store operation failed: {error}")),
     }
+}
+
+fn recovery_audit_page(
+    repository: RepositoryId,
+    query: &LockRecoveryAuditQuery,
+    response: RecoveryAuditPageDto,
+) -> Result<LockRecoveryAuditPage, LockError> {
+    if response.events.len() > query.limit() as usize {
+        return Err(invalid_audit_response(
+            "audit response exceeded the requested page size",
+        ));
+    }
+    let mut entries = Vec::with_capacity(response.events.len());
+    for event in response.events {
+        if event.repository != repository {
+            return Err(invalid_audit_response(
+                "audit response contained a different repository",
+            ));
+        }
+        let event_id = Uuid::parse_str(&event.event_id)
+            .map_err(|_| invalid_audit_response("audit event ID was not a UUID"))?;
+        entries.push(
+            LockRecoveryAuditEntry::try_new(
+                event_id,
+                event.actor,
+                event.expected_owner,
+                event.resources.into_iter().map(Into::into).collect(),
+                event.recorded_at,
+            )
+            .map_err(|error| invalid_audit_response(&error.to_string()))?,
+        );
+    }
+    if !entries.windows(2).all(|pair| {
+        (pair[0].recorded_at(), pair[0].event_id()) > (pair[1].recorded_at(), pair[1].event_id())
+    }) {
+        return Err(invalid_audit_response(
+            "audit events were not in stable newest-first order",
+        ));
+    }
+    let next_cursor = response
+        .next_cursor
+        .map(|cursor| {
+            Uuid::parse_str(&cursor.event_id)
+                .map(|event_id| LockRecoveryAuditCursor::new(event_id, cursor.recorded_at))
+                .map_err(|_| invalid_audit_response("audit cursor event ID was not a UUID"))
+        })
+        .transpose()?;
+    if let Some(cursor) = &next_cursor {
+        let Some(last) = entries.last() else {
+            return Err(invalid_audit_response(
+                "audit response included a cursor without events",
+            ));
+        };
+        if cursor.event_id() != last.event_id() || cursor.recorded_at() != last.recorded_at() {
+            return Err(invalid_audit_response(
+                "audit cursor did not identify the final page event",
+            ));
+        }
+    }
+    Ok(LockRecoveryAuditPage::new(entries, next_cursor))
+}
+
+fn invalid_audit_response(message: &str) -> LockError {
+    LockError::internal(format!(
+        "invalid Cloudflare lock recovery audit response: {message}"
+    ))
 }
 
 #[cfg(test)]

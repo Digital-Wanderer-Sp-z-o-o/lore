@@ -2890,6 +2890,27 @@ typedef struct lore_layer_recovery_event_data_t {
   uint8_t force;
 } lore_layer_recovery_event_data_t;
 
+typedef struct lore_lock_recovery_audit_begin_event_data_t {
+  uint64_t count;
+  struct lore_string_t next_cursor_event_id;
+  uint64_t next_cursor_recorded_at;
+  uint8_t has_next_cursor;
+} lore_lock_recovery_audit_begin_event_data_t;
+
+typedef struct lore_lock_recovery_audit_entry_event_data_t {
+  struct lore_string_t event_id;
+  struct lore_string_t actor_id;
+  struct lore_string_t expected_owner_id;
+  uint64_t recorded_at;
+  uint64_t resource_count;
+} lore_lock_recovery_audit_entry_event_data_t;
+
+typedef struct lore_lock_recovery_audit_resource_event_data_t {
+  struct lore_string_t event_id;
+  lore_branch_id_t branch;
+  struct lore_string_t path;
+} lore_lock_recovery_audit_resource_event_data_t;
+
 // An event delivered to a callback. Each variant names a kind of event and
 // carries the data for that event.
 enum lore_event_id_t {
@@ -3350,6 +3371,12 @@ enum lore_event_id_t {
   LORE_EVENT_REVISION_TREE_BATCH_COMPLETE,
   // An interrupted layer mutation that must be resumed.
   LORE_EVENT_LAYER_RECOVERY,
+  // A page of durable administrative lock-recovery audit began.
+  LORE_EVENT_LOCK_RECOVERY_AUDIT_BEGIN,
+  // One durable administrative lock-recovery audit entry.
+  LORE_EVENT_LOCK_RECOVERY_AUDIT_ENTRY,
+  // One resource included in a lock-recovery audit entry.
+  LORE_EVENT_LOCK_RECOVERY_AUDIT_RESOURCE,
 };
 typedef uint32_t lore_event_tag_t;
 
@@ -3584,6 +3611,9 @@ typedef struct lore_event_t {
     struct lore_compaction_end_event_data_t compaction_end;
     struct lore_revision_tree_batch_complete_event_data_t revision_tree_batch_complete;
     struct lore_layer_recovery_event_data_t layer_recovery;
+    struct lore_lock_recovery_audit_begin_event_data_t lock_recovery_audit_begin;
+    struct lore_lock_recovery_audit_entry_event_data_t lock_recovery_audit_entry;
+    struct lore_lock_recovery_audit_resource_event_data_t lock_recovery_audit_resource;
   };
 } lore_event_t;
 
