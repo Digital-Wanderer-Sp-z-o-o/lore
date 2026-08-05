@@ -134,6 +134,40 @@ pub struct LoreLayerEntryEventData {
     pub revision: Hash,
 }
 
+#[repr(C)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoreLayerRecoveryEventData {
+    /// Path in the outer repository where the interrupted mutation operates.
+    pub target_path: LoreString,
+    /// Repository providing the layered content.
+    pub source_repository: RepositoryId,
+    /// Path inside the source repository where the layer starts.
+    pub source_path: LoreString,
+    /// Metadata used to match revisions between repositories.
+    pub metadata: LoreString,
+    /// Exact source revision persisted before the interrupted mutation began.
+    pub revision: Hash,
+    /// Mutation that must be repeated to resume safely.
+    pub operation: LoreLayerRecoveryOperation,
+    /// Whether a remove operation must purge the layer files.
+    pub purge: u8,
+    /// Whether a remove operation must discard modified files.
+    pub force: u8,
+}
+
+/// cbindgen:prefix-with-name
+/// cbindgen:rename-all=ScreamingSnakeCase
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoreLayerRecoveryOperation {
+    /// Resume adding a layer.
+    Add = 0,
+    /// Resume removing a layer.
+    Remove = 1,
+}
+
 /// Data for the event describing a layer that has staged changes.
 #[repr(C)]
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -451,6 +485,46 @@ mod config_persistence_tests {
             )
             .unwrap();
         assert_eq!(pending, Some((layer, true)));
+    }
+
+    #[test]
+    fn recovery_snapshot_preserves_the_exact_add_revision() {
+        let layer = sample_layer();
+
+        let recovery = layer_recovery(PendingLayerOperation::Add {
+            layer: layer.clone(),
+        });
+
+        assert_eq!(
+            recovery,
+            LayerRecovery {
+                layer,
+                operation: LoreLayerRecoveryOperation::Add,
+                purge: false,
+                force: false,
+            }
+        );
+    }
+
+    #[test]
+    fn recovery_snapshot_preserves_remove_options() {
+        let layer = sample_layer();
+
+        let recovery = layer_recovery(PendingLayerOperation::Remove {
+            layer: layer.clone(),
+            purge: true,
+            force: true,
+        });
+
+        assert_eq!(
+            recovery,
+            LayerRecovery {
+                layer,
+                operation: LoreLayerRecoveryOperation::Remove,
+                purge: true,
+                force: true,
+            }
+        );
     }
 
     #[test]
@@ -1002,9 +1076,51 @@ fn walk_layer_subtree<'a>(
     })
 }
 
-pub async fn list(repository: Arc<RepositoryContext>) -> Result<Vec<Layer>, LayerError> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerRecovery {
+    pub layer: Layer,
+    pub operation: LoreLayerRecoveryOperation,
+    pub purge: bool,
+    pub force: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerListing {
+    pub layers: Vec<Layer>,
+    pub recovery: Option<LayerRecovery>,
+}
+
+pub async fn listing(repository: Arc<RepositoryContext>) -> Result<LayerListing, LayerError> {
     let config = load_config(layer_config_path(repository.require_path()?)).await?;
-    Ok(config.layers)
+    Ok(LayerListing {
+        layers: config.layers,
+        recovery: config.pending_operation.map(layer_recovery),
+    })
+}
+
+pub async fn list(repository: Arc<RepositoryContext>) -> Result<Vec<Layer>, LayerError> {
+    Ok(listing(repository).await?.layers)
+}
+
+fn layer_recovery(operation: PendingLayerOperation) -> LayerRecovery {
+    match operation {
+        PendingLayerOperation::Add { layer } => LayerRecovery {
+            layer,
+            operation: LoreLayerRecoveryOperation::Add,
+            purge: false,
+            force: false,
+        },
+        PendingLayerOperation::Remove {
+            layer,
+            purge,
+            force,
+        } => LayerRecovery {
+            layer,
+            operation: LoreLayerRecoveryOperation::Remove,
+            purge,
+            force,
+        },
+    }
 }
 
 /// Information about a layer with staged changes, including the count of files

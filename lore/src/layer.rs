@@ -210,6 +210,7 @@ pub struct LoreLayerListArgs {}
 /// | Event | Description |
 /// |-------|-------------|
 /// | [`LoreEvent::LayerEntry`](crate::interface::LoreEvent::LayerEntry) | Emitted for each layer configured in the repository |
+/// | [`LoreEvent::LayerRecovery`](crate::interface::LoreEvent::LayerRecovery) | Emitted once when an interrupted layer mutation must be resumed with its persisted parameters |
 pub async fn layer_list(
     globals: LoreGlobalArgs,
     args: LoreLayerListArgs,

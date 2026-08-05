@@ -124,6 +124,7 @@ use crate::interface::LoreMetadata;
 use crate::interface::LoreString;
 use crate::layer::LoreLayerAddEventData;
 use crate::layer::LoreLayerEntryEventData;
+use crate::layer::LoreLayerRecoveryEventData;
 use crate::layer::LoreLayerRemoveEventData;
 use crate::layer::LoreLayerStagedEntryEventData;
 use crate::link::LoreLinkChangeEventData;
@@ -1137,6 +1138,10 @@ pub enum LoreEvent {
     CompactionEnd(LoreCompactionEndEventData),
     /// A batch write call on a revision tree completed as a whole.
     RevisionTreeBatchComplete(LoreRevisionTreeBatchCompleteEventData),
+    // New public events must be appended so existing `#[repr(C, u32)]` discriminants remain
+    // stable for C API consumers.
+    /// An interrupted layer mutation that must be resumed.
+    LayerRecovery(LoreLayerRecoveryEventData),
 }
 
 impl LoreEvent {
