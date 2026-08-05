@@ -292,6 +292,23 @@ pub async fn push(
     token: &RepositoryWriteToken,
     options: PushOptions,
 ) -> Result<(), PushError> {
+    push_with_token(repository, Some(token), options).await
+}
+
+/// Preview the exact recursive units a push would consider without minting a
+/// write token or mutating local or remote repository state.
+pub async fn preview(
+    repository: Arc<RepositoryContext>,
+    options: PushOptions,
+) -> Result<(), PushError> {
+    push_with_token(repository, None, options).await
+}
+
+async fn push_with_token(
+    repository: Arc<RepositoryContext>,
+    token: Option<&RepositoryWriteToken>,
+    options: PushOptions,
+) -> Result<(), PushError> {
     let branch;
     let local_latest;
     if let Some(branch_identifier) = &options.branch {
@@ -379,7 +396,7 @@ pub async fn push(
 
 async fn collect_fragments_and_push(
     repository: Arc<RepositoryContext>,
-    token: &RepositoryWriteToken,
+    token: Option<&RepositoryWriteToken>,
     options: PushOptions,
     state: Arc<State>,
     branch: BranchId,
@@ -570,7 +587,7 @@ async fn collect_fragments_and_push(
     })
     .send();
 
-    let dry_run = execution_context().globals().dry_run();
+    let dry_run = token.is_none() || execution_context().globals().dry_run();
 
     // If the revision is already pushed and the branch still exists, early out.
     // If the branch was deleted, restore it via branch_create before returning.
@@ -719,7 +736,7 @@ async fn collect_fragments_and_push(
 
                 if collect_fragments_and_push_recurse(
                     link_repository,
-                    token.share(),
+                    token.map(RepositoryWriteToken::share),
                     options.clone(),
                     link_state,
                     link_branch_id,
@@ -750,11 +767,18 @@ async fn collect_fragments_and_push(
             )
             .send();
 
-            state.set_parent_self(current_latest);
-            current_revision = state
-                .serialize(repository.clone(), token)
-                .await
-                .forward::<PushError>("serializing state")?;
+            if dry_run {
+                current_revision = state.revision();
+            } else {
+                let token = token.ok_or_else(|| {
+                    PushError::internal("push mutation is missing its repository write token")
+                })?;
+                state.set_parent_self(current_latest);
+                current_revision = state
+                    .serialize(repository.clone(), token)
+                    .await
+                    .forward::<PushError>("serializing state")?;
+            }
 
             event::LoreEvent::BranchPushRevisionUpdateEnd(
                 LoreBranchPushRevisionUpdateEndEventData {
@@ -1072,14 +1096,22 @@ mod link_push_tests {
 
 fn collect_fragments_and_push_recurse(
     repository: Arc<RepositoryContext>,
-    token: RepositoryWriteToken,
+    token: Option<RepositoryWriteToken>,
     options: PushOptions,
     state: Arc<State>,
     branch: BranchId,
     local_latest: Hash,
 ) -> Pin<Box<dyn Future<Output = Result<(), PushError>> + Send>> {
     Box::pin(async move {
-        collect_fragments_and_push(repository, &token, options, state, branch, local_latest).await
+        collect_fragments_and_push(
+            repository,
+            token.as_ref(),
+            options,
+            state,
+            branch,
+            local_latest,
+        )
+        .await
     })
 }
 
