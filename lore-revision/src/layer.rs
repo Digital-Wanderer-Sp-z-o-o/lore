@@ -406,6 +406,7 @@ mod config_persistence_tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn atomic_persist_replaces_the_config_without_leaving_a_temp_file() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let config_path = directory.path().join("layers");

@@ -1075,25 +1075,6 @@ fn link_target_was_already_referenced(
     })
 }
 
-#[cfg(test)]
-mod link_push_tests {
-    use std::str::FromStr;
-
-    use super::*;
-
-    #[test]
-    fn only_an_unchanged_link_target_can_skip_unavailable_content() {
-        let parent = LinkReference::default();
-        let unchanged = parent;
-        let mut changed = parent;
-        changed.signature =
-            Hash::from_str(&"1".repeat(64)).expect("test signature should be valid");
-
-        assert!(link_target_was_already_referenced(&[parent], &unchanged));
-        assert!(!link_target_was_already_referenced(&[parent], &changed));
-    }
-}
-
 fn collect_fragments_and_push_recurse(
     repository: Arc<RepositoryContext>,
     token: Option<RepositoryWriteToken>,
@@ -1340,4 +1321,23 @@ pub(crate) async fn push_fragments(
     lore_debug!("Pushed {} fragments", fragment_count);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod link_push_tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn only_an_unchanged_link_target_can_skip_unavailable_content() {
+        let parent = LinkReference::default();
+        let unchanged = parent;
+        let mut changed = parent;
+        changed.signature =
+            Hash::from_str(&"1".repeat(64)).expect("test signature should be valid");
+
+        assert!(link_target_was_already_referenced(&[parent], &unchanged));
+        assert!(!link_target_was_already_referenced(&[parent], &changed));
+    }
 }

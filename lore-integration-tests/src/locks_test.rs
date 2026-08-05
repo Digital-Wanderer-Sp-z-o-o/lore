@@ -80,12 +80,7 @@ mod locks_tests {
                 }
 
                 lock_store
-                    .unlock_resources(
-                        owner.as_str(),
-                        /* validate_user */ true,
-                        repository,
-                        &resources,
-                    )
+                    .unlock_resources(owner.as_str(), owner.as_str(), repository, &resources)
                     .await?;
 
                 for resource in resources {
@@ -136,7 +131,7 @@ mod locks_tests {
                 // Attempt to unlock resources given the user is not the owner of the lock and
                 // it DOES NOT have "admin" or "owner" permissions
                 let _ = lock_store
-                    .unlock_resources(user.as_str(), true, repository, &resources)
+                    .unlock_resources(user.as_str(), user.as_str(), repository, &resources)
                     .await;
 
                 for resource in &resources {
@@ -155,7 +150,7 @@ mod locks_tests {
                 // Unlock resources given the user is not the owner of the lock and
                 // it DOES have "admin" or "owner" permissions
                 lock_store
-                    .unlock_resources(user.as_str(), false, repository, &resources)
+                    .unlock_resources(user.as_str(), owner.as_str(), repository, &resources)
                     .await?;
 
                 for resource in &resources {

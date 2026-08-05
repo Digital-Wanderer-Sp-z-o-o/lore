@@ -359,7 +359,11 @@ pub trait Lock: Send + Sync {
     async fn status(&self, resources: &[LockResource]) -> Result<Vec<LockData>, ProtocolError>;
 
     /// Remove the lock over the resource(s)
-    async fn unlock(&self, resources: &[LockResource]) -> Result<Vec<LockResource>, ProtocolError>;
+    async fn unlock(
+        &self,
+        resources: &[LockResource],
+        expected_owner: Option<&str>,
+    ) -> Result<Vec<LockResource>, ProtocolError>;
 }
 
 /// Environment protocol

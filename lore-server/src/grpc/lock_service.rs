@@ -73,6 +73,21 @@ fn lock_query_from_request(
     }
 }
 
+fn resolve_expected_unlock_owner(
+    actor_id: &str,
+    requested_owner: Option<&str>,
+    can_override_owner: bool,
+) -> Result<String, Status> {
+    let requested_owner = requested_owner.filter(|owner| !owner.is_empty());
+    match requested_owner {
+        None => Ok(actor_id.to_owned()),
+        Some(owner) if owner == actor_id || can_override_owner => Ok(owner.to_owned()),
+        Some(_) => Err(Status::permission_denied(
+            "Only a repository administrator can release another owner's lock",
+        )),
+    }
+}
+
 fn handle_lock_error(error: LockError) -> Status {
     match error {
         LockError::LockNotFound(_) => Status::not_found(error.to_string()),
@@ -288,8 +303,13 @@ impl LoreLockService {
         let user_id = get_user_id(request.extensions());
         let correlation_id = extract_correlation_id(&request).unwrap_or_default();
         let repository = get_repository(request.metadata())?;
-        let validate_user = !is_owner_or_admin(request.extensions(), repository);
+        let can_override_owner = is_owner_or_admin(request.extensions(), repository);
         let unlock_request = request.into_inner();
+        let expected_owner = resolve_expected_unlock_owner(
+            &user_id,
+            unlock_request.expected_owner.as_deref(),
+            can_override_owner,
+        )?;
 
         self.locking_histogram.record(
             unlock_request.resources.len() as u64,
@@ -311,9 +331,22 @@ impl LoreLockService {
             .scope(execution, async move {
                 let resources = self
                     .lock_store
-                    .unlock_resources(user_id.as_str(), validate_user, repository, &resources)
+                    .unlock_resources(
+                        user_id.as_str(),
+                        expected_owner.as_str(),
+                        repository,
+                        &resources,
+                    )
                     .await
                     .map_err(handle_lock_error)?;
+
+                info!(
+                    actor_id = %user_id,
+                    expected_owner_id = %expected_owner,
+                    administrative_override = expected_owner != user_id,
+                    resource_count = resources.len(),
+                    "Released lock resources with owner compare-and-swap"
+                );
 
                 // TODO: UCS-13626 move branch out of individual resources into the main message
                 // All resources are on the same branch and the lock call has to be made with at least 1 resource
@@ -424,7 +457,7 @@ mod test {
     use tonic::Code;
     use tonic::Request;
 
-    use crate::grpc::lock_service::LoreLockService;
+    use crate::grpc::lock_service::{LoreLockService, resolve_expected_unlock_owner};
 
     mod store {
         use async_trait::async_trait;
@@ -459,12 +492,38 @@ mod test {
 
                 async fn unlock_resources(
                     &self,
-                    owner_id: &str,
-                    validate_user: bool,
+                    actor_id: &str,
+                    expected_owner_id: &str,
                     repository: RepositoryId,
                     resources: &[LockResource],
                 ) -> Result<Vec<LockResource>, LockError>;
             }
+        }
+    }
+
+    mod ownership {
+        use super::*;
+
+        #[test]
+        fn defaults_to_the_authenticated_actor() {
+            assert_eq!(
+                resolve_expected_unlock_owner("artist", None, true).unwrap(),
+                "artist"
+            );
+        }
+
+        #[test]
+        fn permits_an_admin_to_compare_a_foreign_owner() {
+            assert_eq!(
+                resolve_expected_unlock_owner("admin", Some("artist"), true).unwrap(),
+                "artist"
+            );
+        }
+
+        #[test]
+        fn rejects_a_foreign_owner_for_an_ordinary_member() {
+            let error = resolve_expected_unlock_owner("member", Some("artist"), false).unwrap_err();
+            assert_eq!(error.code(), Code::PermissionDenied);
         }
     }
 
@@ -590,7 +649,10 @@ mod test {
                 Duration::from_secs(60),
             );
 
-            let mut request = Request::new(UnlockRequest { resources: vec![] });
+            let mut request = Request::new(UnlockRequest {
+                resources: vec![],
+                expected_owner: None,
+            });
             let repository = random::<RepositoryId>();
             request.metadata_mut().insert_bin(
                 REPOSITORY_ID_KEY,
@@ -674,6 +736,7 @@ mod test {
                     hash: Default::default(),
                     description: "".to_string(),
                 }],
+                expected_owner: None,
             });
             let repository = random::<RepositoryId>();
             request.metadata_mut().insert_bin(
