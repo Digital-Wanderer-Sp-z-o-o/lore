@@ -172,7 +172,7 @@ pub struct LoreLayerRemoveEventData {
     pub modified_count: u64,
 }
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 pub struct Layer {
     /// Path in the parent outer repository where the layer should be placed
     pub target_path: String,
@@ -188,9 +188,91 @@ pub struct Layer {
     pub staged: Hash,
 }
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PendingLayerOperation {
+    Add {
+        layer: Layer,
+    },
+    Remove {
+        layer: Layer,
+        purge: bool,
+        force: bool,
+    },
+}
+
+#[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 struct LayerConfig {
+    #[serde(default)]
     layers: Vec<Layer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_operation: Option<PendingLayerOperation>,
+}
+
+impl LayerConfig {
+    fn pending_add(
+        &self,
+        target_path: &RelativePath,
+        source_repository: RepositoryId,
+        source_path: &RelativePath,
+        metadata: Option<&str>,
+    ) -> Result<Option<Layer>, LayerError> {
+        match &self.pending_operation {
+            None => Ok(None),
+            Some(PendingLayerOperation::Add { layer })
+                if layer.target_path == target_path.as_str()
+                    && layer.repository == source_repository
+                    && layer.source_path == source_path.as_str()
+                    && layer.metadata.as_deref() == metadata =>
+            {
+                Ok(Some(layer.clone()))
+            }
+            Some(operation) => Err(pending_operation_conflict(operation)),
+        }
+    }
+
+    fn pending_remove(
+        &self,
+        target_path: &RelativePath,
+        source_repository: RepositoryId,
+        purge: bool,
+    ) -> Result<Option<(Layer, bool)>, LayerError> {
+        match &self.pending_operation {
+            None => Ok(None),
+            Some(PendingLayerOperation::Remove {
+                layer,
+                purge: pending_purge,
+                force,
+            }) if layer.target_path == target_path.as_str()
+                && (source_repository.is_zero() || layer.repository == source_repository)
+                && *pending_purge == purge =>
+            {
+                Ok(Some((layer.clone(), *force)))
+            }
+            Some(operation) => Err(pending_operation_conflict(operation)),
+        }
+    }
+}
+
+fn pending_operation_conflict(operation: &PendingLayerOperation) -> LayerError {
+    let pending = match operation {
+        PendingLayerOperation::Add { layer } => {
+            format!("add at '{}'", display_layer_path(&layer.target_path))
+        }
+        PendingLayerOperation::Remove { layer, .. } => {
+            format!("remove at '{}'", display_layer_path(&layer.target_path))
+        }
+    };
+    InvalidArguments {
+        reason: format!(
+            "Layer operation '{pending}' requires recovery; repeat that exact operation before starting another layer mutation"
+        ),
+    }
+    .into()
+}
+
+fn display_layer_path(path: &str) -> &str {
+    if path.is_empty() { "/" } else { path }
 }
 
 async fn load_config(config_path: impl AsRef<Path>) -> Result<LayerConfig, LayerError> {
@@ -276,6 +358,19 @@ fn temporary_config_path(config_path: &Path) -> PathBuf {
 mod config_persistence_tests {
     use super::*;
 
+    fn sample_layer() -> Layer {
+        let mut repository = RepositoryId::default();
+        repository.data_mut()[0] = 1;
+        Layer {
+            target_path: "Interiors/Units".to_owned(),
+            source_path: String::new(),
+            repository,
+            metadata: Some("project_revision".to_owned()),
+            current: Hash::from_u64(2),
+            staged: Hash::default(),
+        }
+    }
+
     #[tokio::test]
     async fn atomic_persist_replaces_the_config_without_leaving_a_temp_file() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -293,6 +388,75 @@ mod config_persistence_tests {
             .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path(), config_path);
+    }
+
+    #[test]
+    fn legacy_config_without_pending_operation_remains_readable() {
+        let serialized = toml::to_string_pretty(&LayerConfig {
+            layers: vec![sample_layer()],
+            pending_operation: None,
+        })
+        .unwrap();
+        assert!(!serialized.contains("pending_operation"));
+
+        let parsed: LayerConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(parsed.layers, vec![sample_layer()]);
+        assert_eq!(parsed.pending_operation, None);
+    }
+
+    #[test]
+    fn pending_add_round_trips_with_the_exact_revision() {
+        let layer = sample_layer();
+        let config = LayerConfig {
+            layers: Vec::new(),
+            pending_operation: Some(PendingLayerOperation::Add {
+                layer: layer.clone(),
+            }),
+        };
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let parsed: LayerConfig = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(parsed, config);
+        let pending = parsed
+            .pending_add(
+                &RelativePath::new_from_initial_path("Interiors/Units").unwrap(),
+                layer.repository,
+                &RelativePath::default(),
+                Some("project_revision"),
+            )
+            .unwrap();
+        assert_eq!(pending, Some(layer));
+    }
+
+    #[test]
+    fn pending_remove_preserves_destructive_options_for_resume() {
+        let layer = sample_layer();
+        let config = LayerConfig {
+            layers: vec![layer.clone()],
+            pending_operation: Some(PendingLayerOperation::Remove {
+                layer: layer.clone(),
+                purge: true,
+                force: true,
+            }),
+        };
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let parsed: LayerConfig = toml::from_str(&serialized).unwrap();
+
+        let pending = parsed
+            .pending_remove(
+                &RelativePath::new_from_initial_path("Interiors/Units").unwrap(),
+                RepositoryId::default(),
+                true,
+            )
+            .unwrap();
+        assert_eq!(pending, Some((layer, true)));
+    }
+
+    #[test]
+    fn purge_cannot_target_the_repository_root() {
+        assert!(validate_layer_remove_options(&RelativePath::default(), true).is_err());
+        assert!(validate_layer_remove_options(&RelativePath::default(), false).is_ok());
     }
 }
 
@@ -343,6 +507,11 @@ pub async fn add(
     source_path: RelativePath,
     metadata: Option<&str>,
 ) -> Result<(), LayerError> {
+    let config_path = layer_config_path(repository.require_path()?);
+    let mut config = load_config(&config_path).await?;
+    let pending_layer =
+        config.pending_add(&target_path, source_repository, &source_path, metadata)?;
+
     let (_state_current, state_staged, current_branch) =
         State::deserialize_current_and_staged(repository.clone())
             .await
@@ -367,72 +536,67 @@ pub async fn add(
     let default_branch_id = repository_metadata.default_branch;
     let current_branch_id = current_branch;
 
-    // Get the latest revision of the branch in the layer repository
-    let layer_latest = if let Ok(layer_latest) =
-        branch::load_remote_latest(layer_remote.clone(), layer_repository.id, current_branch_id)
-            .await
-    {
-        lore_debug!("Layer repository branch exists, remote latest revision {layer_latest}");
-        layer_latest
+    let layer_revision = if let Some(layer) = &pending_layer {
+        lore_info!(
+            "Resume interrupted layer add at {} using revision {}",
+            display_layer_path(&layer.target_path),
+            layer.current
+        );
+        layer.current
     } else {
-        // If branch did not exist, create it
-        let branch_metadata = branch::metadata(repository.clone(), current_branch_id)
-            .await
-            .forward::<LayerError>("Failed getting branch metadata")?;
-        let branch_name = branch::name(&branch_metadata)
-            .forward::<LayerError>("Failed getting branch metadata")?;
-        let branch_category = branch::category(&branch_metadata).unwrap_or_default();
-
-        // TODO(mjansson): Do we need to recreate branch hierarchies here, or fine to just branch
-        //                 from default branch at current latest?
-        let parent_latest = branch::load_remote_latest(
-            layer_remote.clone(),
-            layer_repository.id,
-            default_branch_id,
-        )
-        .await
-        .forward::<LayerError>("Failed getting branch metadata")?;
-
-        lore_debug!("Creating layer repository branch {branch_name} at revision {parent_latest}");
-
-        let user_id = execution_context().user_id().await;
-
-        let branch_stack = vec![BranchPoint {
-            branch: default_branch_id,
-            revision: parent_latest,
-        }];
-
-        let revision = layer_remote
-            .revision(layer_repository.id)
-            .await
-            .forward::<LayerError>("Not connected")?;
-        let layer_latest = revision
-            .branch_create(
-                current_branch_id,
-                branch_name,
-                branch_category,
-                user_id.as_str(),
-                &branch_stack,
+        let layer_latest = if let Ok(layer_latest) =
+            branch::load_remote_latest(layer_remote.clone(), layer_repository.id, current_branch_id)
+                .await
+        {
+            lore_debug!("Layer repository branch exists, remote latest revision {layer_latest}");
+            layer_latest
+        } else {
+            let branch_metadata = branch::metadata(repository.clone(), current_branch_id)
+                .await
+                .forward::<LayerError>("Failed getting branch metadata")?;
+            let branch_name = branch::name(&branch_metadata)
+                .forward::<LayerError>("Failed getting branch metadata")?;
+            let branch_category = branch::category(&branch_metadata).unwrap_or_default();
+            let parent_latest = branch::load_remote_latest(
+                layer_remote.clone(),
+                layer_repository.id,
+                default_branch_id,
             )
             .await
-            .forward::<LayerError>("Failed to create branch in layer repository")?;
+            .forward::<LayerError>("Failed getting branch metadata")?;
+            let user_id = execution_context().user_id().await;
+            let branch_stack = vec![BranchPoint {
+                branch: default_branch_id,
+                revision: parent_latest,
+            }];
+            let revision = layer_remote
+                .revision(layer_repository.id)
+                .await
+                .forward::<LayerError>("Not connected")?;
+            revision
+                .branch_create(
+                    current_branch_id,
+                    branch_name,
+                    branch_category,
+                    user_id.as_str(),
+                    &branch_stack,
+                )
+                .await
+                .forward::<LayerError>("Failed to create branch in layer repository")?
+        };
 
-        lore_debug!(
-            "Layer repository branch {branch_name} created at latest revision {layer_latest}"
-        );
-        layer_latest
+        lore_debug!("Find matching revision");
+        find_revision_match(
+            repository.clone(),
+            layer_repository.clone(),
+            current_branch_id,
+            state_staged.clone(),
+            layer_latest,
+            metadata,
+        )
+        .await?
+        .0
     };
-
-    lore_debug!("Find matching revision");
-    let (layer_revision, _) = find_revision_match(
-        repository.clone(),
-        layer_repository.clone(),
-        current_branch_id,
-        state_staged.clone(),
-        layer_latest,
-        metadata,
-    )
-    .await?;
 
     lore_debug!("Load layer revision state {layer_revision}");
     let layer_state = State::deserialize(layer_repository.clone(), layer_revision)
@@ -469,24 +633,26 @@ pub async fn add(
         ));
     }
 
-    let mut config = load_config(layer_config_path(repository.require_path()?)).await?;
-
-    for layer in config.layers.iter() {
-        if layer.repository == layer_repository.id
-            && layer.target_path.as_str() == target_path.as_str()
-        {
-            return Err(AlreadyLinked.into());
-        }
-    }
-
-    config.layers.push(Layer {
+    let layer = pending_layer.unwrap_or_else(|| Layer {
         target_path: target_path.to_string(),
         source_path: source_path.to_string(),
         repository: layer_repository.id,
-        metadata: metadata.map(|key| key.to_string()),
+        metadata: metadata.map(str::to_owned),
         current: layer_revision,
         staged: Hash::default(),
     });
+
+    if config.pending_operation.is_none() {
+        if config.layers.iter().any(|configured| {
+            configured.repository == layer.repository && configured.target_path == layer.target_path
+        }) {
+            return Err(AlreadyLinked.into());
+        }
+        config.pending_operation = Some(PendingLayerOperation::Add {
+            layer: layer.clone(),
+        });
+        save_config(token, &config_path, &config).await?;
+    }
 
     let absolute_path = target_path.to_absolute_path(repository.require_path()?);
 
@@ -500,15 +666,6 @@ pub async fn add(
         .session(layer_repository.id, &correlation_id)
         .await
         .forward::<LayerError>("Not connected")?;
-
-    event::LoreEvent::LayerAdd(LoreLayerAddEventData {
-        target_path: LoreString::from(&target_path),
-        source_repository: layer_repository.id,
-        source_path: LoreString::from(&source_path),
-        metadata: metadata.into(),
-        revision: layer_revision,
-    })
-    .send();
 
     // Ensure the target path exist to clone into
     tokio::fs::create_dir_all(&absolute_path)
@@ -531,12 +688,18 @@ pub async fn add(
     .await
     .forward::<LayerError>("Failed cloning target layer")?;
 
-    save_config(
-        token,
-        layer_config_path(repository.require_path()?),
-        &config,
-    )
-    .await?;
+    config.layers.push(layer.clone());
+    config.pending_operation = None;
+    save_config(token, &config_path, &config).await?;
+
+    event::LoreEvent::LayerAdd(LoreLayerAddEventData {
+        target_path: LoreString::from_str(&layer.target_path),
+        source_repository: layer.repository,
+        source_path: LoreString::from_str(&layer.source_path),
+        metadata: layer.metadata.as_deref().into(),
+        revision: layer.current,
+    })
+    .send();
 
     Ok(())
 }
@@ -582,11 +745,22 @@ pub async fn remove(
     source_repository: RepositoryId,
     purge: bool,
 ) -> Result<(), LayerError> {
+    validate_layer_remove_options(&target_path, purge)?;
     let config_path = layer_config_path(repository.require_path()?);
     let mut config = load_config(&config_path).await?;
-
-    let layer_index = resolve_layer_index(&config.layers, target_path.as_str(), source_repository)?;
-    let layer = config.layers[layer_index].clone();
+    let pending = config.pending_remove(&target_path, source_repository, purge)?;
+    let (layer_index, layer, force, resuming) = if let Some((layer, force)) = pending {
+        let index = resolve_layer_index(&config.layers, &layer.target_path, layer.repository)?;
+        lore_info!(
+            "Resume interrupted layer remove at {}",
+            display_layer_path(&layer.target_path)
+        );
+        (index, layer, force, true)
+    } else {
+        let index = resolve_layer_index(&config.layers, target_path.as_str(), source_repository)?;
+        let layer = config.layers[index].clone();
+        (index, layer, execution_context().globals().force(), false)
+    };
 
     let layer_repository = Arc::new(repository.to_layer_context(layer.repository).await);
     let layer_state = State::deserialize(layer_repository.clone(), layer.current)
@@ -602,59 +776,76 @@ pub async fn remove(
         .await
         .forward::<LayerError>("Failed to locate layer source node")?;
 
-    let force = execution_context().globals().force();
-    let mut tracked_files: Vec<RelativePath> = Vec::new();
-    let mut tracked_directories: Vec<RelativePath> = Vec::new();
-    let mut modified: Vec<String> = Vec::new();
+    let mut walk = LayerWalk::default();
 
     walk_layer_subtree(
         layer_repository.clone(),
         layer_state.clone(),
         source_node_link.node,
         target_path.clone(),
-        &mut tracked_files,
-        &mut tracked_directories,
-        &mut modified,
+        &mut walk,
+        if resuming {
+            MissingTrackedFile::AlreadyRemoved
+        } else {
+            MissingTrackedFile::Modification
+        },
     )
     .await?;
 
-    if !modified.is_empty() && !force {
+    if !walk.modified.is_empty() && !force {
         lore_warn!(
             "Layer at '{}' has locally modified files (use --force to discard): {}",
             target_path.as_str(),
-            modified.join(", ")
+            walk.modified.join(", ")
         );
         return Err(LocalModifications.into());
     }
 
-    let modified_count = modified.len() as u64;
-    let file_count = tracked_files.len() as u64;
-    let directory_count = tracked_directories.len() as u64;
+    let modified_count = walk.modified.len() as u64;
+    let file_count = walk.tracked_files.len() as u64;
+    let directory_count = walk.tracked_directories.len() as u64;
     let absolute_root = target_path.to_absolute_path(repository.require_path()?);
+
+    if !resuming {
+        config.pending_operation = Some(PendingLayerOperation::Remove {
+            layer: layer.clone(),
+            purge,
+            force,
+        });
+        save_config(token, &config_path, &config).await?;
+    }
 
     if purge {
         // Full nuke: delete the entire target subtree including untracked
         // content. Force is independent — if there were modifications without
         // --force we already returned above.
-        if let Err(err) = crate::util::fs::unlink_recursive(&absolute_root).await {
-            lore_warn!(
-                "Failed to purge layer root {}: {err}",
-                absolute_root.display()
-            );
+        if let Err(error) = crate::util::fs::unlink_recursive(&absolute_root).await
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(LayerError::internal_with_context(
+                error,
+                &format!("Failed to purge layer root {}", absolute_root.display()),
+            ));
         }
     } else {
-        for file in &tracked_files {
+        for file in &walk.tracked_files {
             let absolute = file.to_absolute_path(repository.require_path()?);
-            if let Err(err) = crate::util::fs::unlink(&absolute).await {
-                lore_warn!("Failed to remove layer file {}: {err}", absolute.display());
+            if let Err(error) = crate::util::fs::unlink(&absolute).await
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(LayerError::internal_with_context(
+                    error,
+                    &format!("Failed to remove layer file {}", absolute.display()),
+                ));
             }
         }
 
         // Bottom-up: deepest directories first so empty dirs collapse when
         // their children are gone. Untracked files keep their parent dirs
         // alive — remove_dir fails on non-empty dirs and is skipped silently.
-        tracked_directories.sort_by_key(|p| std::cmp::Reverse(p.as_str().split('/').count()));
-        for dir in &tracked_directories {
+        walk.tracked_directories
+            .sort_by_key(|p| std::cmp::Reverse(p.as_str().split('/').count()));
+        for dir in &walk.tracked_directories {
             let absolute = dir.to_absolute_path(repository.require_path()?);
             if let Err(err) = tokio::fs::remove_dir(&absolute).await
                 && err.kind() != tokio::io::ErrorKind::NotFound
@@ -678,6 +869,7 @@ pub async fn remove(
     }
 
     config.layers.remove(layer_index);
+    config.pending_operation = None;
     save_config(token, &config_path, &config).await?;
 
     event::LoreEvent::LayerRemove(LoreLayerRemoveEventData {
@@ -696,14 +888,40 @@ pub async fn remove(
     Ok(())
 }
 
+fn validate_layer_remove_options(
+    target_path: &RelativePath,
+    purge: bool,
+) -> Result<(), LayerError> {
+    if purge && target_path.is_empty() {
+        return Err(InvalidArguments {
+            reason: "Cannot purge a layer mounted at repository root; remove it without purge"
+                .to_owned(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum MissingTrackedFile {
+    Modification,
+    AlreadyRemoved,
+}
+
+#[derive(Default)]
+struct LayerWalk {
+    tracked_files: Vec<RelativePath>,
+    tracked_directories: Vec<RelativePath>,
+    modified: Vec<String>,
+}
+
 fn walk_layer_subtree<'a>(
     layer_repository: Arc<RepositoryContext>,
     layer_state: Arc<State>,
     node: NodeID,
     filesystem_path: RelativePath,
-    tracked_files: &'a mut Vec<RelativePath>,
-    tracked_directories: &'a mut Vec<RelativePath>,
-    modified: &'a mut Vec<String>,
+    output: &'a mut LayerWalk,
+    missing_file: MissingTrackedFile,
 ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), LayerError>> + Send + 'a>> {
     Box::pin(async move {
         let mut iter = crate::state::StateNodeChildrenWithNameIterator::new(
@@ -727,15 +945,14 @@ fn walk_layer_subtree<'a>(
             drop(child_name);
 
             if child_node.is_directory() {
-                tracked_directories.push(child_path.clone());
+                output.tracked_directories.push(child_path.clone());
                 walk_layer_subtree(
                     layer_repository.clone(),
                     layer_state.clone(),
                     child_id,
                     child_path,
-                    tracked_files,
-                    tracked_directories,
-                    modified,
+                    output,
+                    missing_file,
                 )
                 .await?;
             } else {
@@ -755,20 +972,28 @@ fn walk_layer_subtree<'a>(
                         .await
                         .map_or(true, |(m, _)| m);
                         if is_modified {
-                            modified.push(child_path.as_str().to_string());
+                            output.modified.push(child_path.as_str().to_string());
                         }
-                        tracked_files.push(child_path);
+                        output.tracked_files.push(child_path);
                     }
                     Ok(_) => {
-                        modified.push(format!("{} (type changed)", child_path.as_str()));
-                        tracked_files.push(child_path);
+                        output
+                            .modified
+                            .push(format!("{} (type changed)", child_path.as_str()));
+                        output.tracked_files.push(child_path);
                     }
                     Err(err) if err.kind() == tokio::io::ErrorKind::NotFound => {
-                        modified.push(format!("{} (missing)", child_path.as_str()));
+                        if matches!(missing_file, MissingTrackedFile::Modification) {
+                            output
+                                .modified
+                                .push(format!("{} (missing)", child_path.as_str()));
+                        }
                     }
                     Err(err) => {
                         lore_warn!("Failed to stat layer file {}: {err}", absolute.display());
-                        modified.push(format!("{} (stat failed)", child_path.as_str()));
+                        output
+                            .modified
+                            .push(format!("{} (stat failed)", child_path.as_str()));
                     }
                 }
             }
