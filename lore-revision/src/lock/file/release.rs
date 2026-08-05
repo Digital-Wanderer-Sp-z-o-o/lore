@@ -267,6 +267,7 @@ pub async fn release(
         let batch_resources = batch_resources.to_vec();
         let remote = remote.clone();
         let repository_id = repository.id;
+        let expected_owner = owner.clone();
         lore_spawn!(batches, async move {
             let response = remote
                 .lock(repository_id)
@@ -274,7 +275,7 @@ pub async fn release(
                 .forward_with::<ReleaseError, _>(|| {
                     format!("Failed to connect to remote {}", remote.remote_url())
                 })?
-                .unlock(&batch_resources)
+                .unlock(&batch_resources, expected_owner.as_deref())
                 .await
                 .forward::<ReleaseError>("Failed to release the lock")?;
 

@@ -148,6 +148,11 @@ impl ::prost::Name for StatusResponse {
 pub struct UnlockRequest {
     #[prost(message, repeated, tag = "1")]
     pub resources: ::prost::alloc::vec::Vec<Resource>,
+    /// When present, every lock must still belong to this owner. The server uses
+    /// the authenticated caller when omitted and permits a different owner only
+    /// for repository administrators.
+    #[prost(string, optional, tag = "2")]
+    pub expected_owner: ::core::option::Option<::prost::alloc::string::String>,
 }
 impl ::prost::Name for UnlockRequest {
     const NAME: &'static str = "UnlockRequest";

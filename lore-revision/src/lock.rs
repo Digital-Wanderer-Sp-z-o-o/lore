@@ -60,10 +60,12 @@ pub trait LockStore: Send + Sync {
 
     /// Unlock all of the requested resources. If any resource cannot be unlocked, the entire
     /// operation will fail.
+    /// `actor_id` identifies the authenticated caller for auditing, while
+    /// `expected_owner_id` is compared atomically with every stored lock.
     async fn unlock_resources(
         &self,
-        owner_id: &str,
-        validate_user: bool,
+        actor_id: &str,
+        expected_owner_id: &str,
         repository: RepositoryId,
         resources: &[LockResource],
     ) -> Result<Vec<LockResource>, LockError>;

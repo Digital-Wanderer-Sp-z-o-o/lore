@@ -288,6 +288,48 @@ describe("Lore Durable Objects backend", () => {
       expect.objectContaining({ owner: "bob", lockedAt: 1_000 }),
     ]);
   });
+
+  it("releases an administrative batch only for the expected owner", async () => {
+    const repository = PARTITION;
+    const first = resource(46, "first.blend");
+    const second = resource(47, "second.blend");
+    const stub = env.LOCK_COORDINATOR.getByName("owner-cas-contract");
+
+    await stub.lockResources(
+      "alice",
+      repository,
+      [first, second],
+      1_000,
+      10_000,
+    );
+    await expect(
+      stub.unlockResources(
+        "admin",
+        "bob",
+        repository,
+        [first, second],
+        1_500,
+        10_000,
+      ),
+    ).resolves.toEqual({ status: "not_owned" });
+    await expect(
+      stub.checkLocksStatus(repository, [first, second], 1_500, 10_000),
+    ).resolves.toHaveLength(2);
+
+    await expect(
+      stub.unlockResources(
+        "admin",
+        "alice",
+        repository,
+        [first, second],
+        1_500,
+        10_000,
+      ),
+    ).resolves.toMatchObject({ status: "ok", resources: [first, second] });
+    await expect(
+      stub.checkLocksStatus(repository, [first, second], 1_500, 10_000),
+    ).resolves.toEqual([]);
+  });
 });
 
 function hash(byte: number): string {

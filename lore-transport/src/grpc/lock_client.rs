@@ -142,6 +142,7 @@ impl LockService {
     pub async fn unlock(
         &self,
         resources: &[LockResource],
+        expected_owner: Option<&str>,
     ) -> Result<Vec<LockResource>, ProtocolError> {
         lore_debug!("Releasing resources");
 
@@ -151,6 +152,7 @@ impl LockService {
         let resources = loop {
             let request = UnlockRequest {
                 resources: resources.iter().map(Into::into).collect(),
+                expected_owner: expected_owner.map(str::to_owned),
             };
 
             let mut client = self.client.clone();

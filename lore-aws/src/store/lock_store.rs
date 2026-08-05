@@ -570,8 +570,8 @@ impl LockStore for DynamoDbLockStore {
     #[tracing::instrument(name = "DynamoDbLockStore::unlock_resources", skip_all)]
     async fn unlock_resources(
         &self,
-        owner_id: &str,
-        validate_user: bool,
+        actor_id: &str,
+        expected_owner_id: &str,
         repository: RepositoryId,
         resources: &[LockResource],
     ) -> Result<Vec<LockResource>, LockError> {
@@ -600,24 +600,19 @@ impl LockStore for DynamoDbLockStore {
 
             let key = serde_dynamo::to_item(&lock_key).internal("failed to serialize lock key")?;
 
-            let delete_item = if validate_user {
-                Delete::builder()
-                    .table_name(&*self.table_name)
-                    .set_key(Some(key))
-                    .condition_expression("ownerId = :val")
-                    .expression_attribute_values(":val", AttributeValue::S(owner_id.to_string()))
-                    .return_values_on_condition_check_failure(
-                        ReturnValuesOnConditionCheckFailure::AllOld,
-                    )
-                    .build()
-                    .internal("failed to create delete request")?
-            } else {
-                Delete::builder()
-                    .table_name(&*self.table_name)
-                    .set_key(Some(key))
-                    .build()
-                    .internal("failed to create delete request")?
-            };
+            let delete_item = Delete::builder()
+                .table_name(&*self.table_name)
+                .set_key(Some(key))
+                .condition_expression("ownerId = :val")
+                .expression_attribute_values(
+                    ":val",
+                    AttributeValue::S(expected_owner_id.to_string()),
+                )
+                .return_values_on_condition_check_failure(
+                    ReturnValuesOnConditionCheckFailure::AllOld,
+                )
+                .build()
+                .internal("failed to create delete request")?;
 
             write_items.push(TransactWriteItem::builder().delete(delete_item).build());
         }
@@ -654,7 +649,7 @@ impl LockStore for DynamoDbLockStore {
 
                                 // This path executes when a lock exists but is owned by other user
                                 warn!(
-                                    "Could not unlock {resource_description} in repository {repository}, lock owned by another user (expected {owner_id})"
+                                    "Could not unlock {resource_description} in repository {repository}, lock owned by another user (expected {expected_owner_id})"
                                 );
                                 return Err(LockNotOwned.into());
                             } else {
@@ -690,14 +685,15 @@ impl LockStore for DynamoDbLockStore {
                     // of `"ThrottlingException"`, rather than a `TransactionCanceledException` with
                     // a reason of `BatchStatementErrorCodeEnum::ThrottlingError`.
                     warn!(
-                        "DynamoDB rate limit exceeded while unlocking {} resources for {owner_id} in repository {repository} {error:?}",
+                        "DynamoDB rate limit exceeded while unlocking {} resources for actor {actor_id} in repository {repository} {error:?}",
                         resources.len()
                     );
                     Err(SlowDown.into())
                 } else if let Some(e) = error.as_service_error() {
                     warn!(
                         e = ?e,
-                        owner_id,
+                        actor_id,
+                        expected_owner_id,
                         "Unexpected transact write items error while unlocking resources",
                     );
                     Err(LockError::internal(
@@ -988,7 +984,7 @@ mod test {
         }];
 
         lock_store
-            .unlock_resources(user_id, true, repository, &resources)
+            .unlock_resources(user_id, user_id, repository, &resources)
             .await
             .expect("Unlock resources should not have failed");
     }
@@ -1038,7 +1034,7 @@ mod test {
         }];
 
         lock_store
-            .unlock_resources(user_id, true, repository, &resources)
+            .unlock_resources(user_id, user_id, repository, &resources)
             .await
             .expect_err("Unlock resources should have failed");
     }
@@ -1825,7 +1821,7 @@ mod test {
         let err = lock_store
             .unlock_resources(
                 "some-owner",
-                true,
+                "some-owner",
                 repository,
                 &[LockResource {
                     branch,
@@ -1874,7 +1870,7 @@ mod test {
         let err = lock_store
             .unlock_resources(
                 "some-owner",
-                true,
+                "some-owner",
                 repository,
                 &[LockResource {
                     branch,
@@ -1927,7 +1923,7 @@ mod test {
         let err = lock_store
             .unlock_resources(
                 "some-owner",
-                true,
+                "some-owner",
                 repository,
                 &[LockResource {
                     branch,

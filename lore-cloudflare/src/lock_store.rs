@@ -84,8 +84,8 @@ impl LockStore for CloudflareLockStore {
 
     async fn unlock_resources(
         &self,
-        owner_id: &str,
-        validate_user: bool,
+        actor_id: &str,
+        expected_owner_id: &str,
         repository: RepositoryId,
         resources: &[LockResource],
     ) -> Result<Vec<LockResource>, LockError> {
@@ -94,8 +94,8 @@ impl LockStore for CloudflareLockStore {
             .post(
                 "/v1/locks/release",
                 &ReleaseRequest {
-                    owner: owner_id,
-                    validate_user,
+                    actor: actor_id,
+                    expected_owner: expected_owner_id,
                     repository,
                     resources: resources.iter().map(LockResourceDto::from).collect(),
                 },
@@ -179,8 +179,8 @@ struct AcquireRequest<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ReleaseRequest<'a> {
-    owner: &'a str,
-    validate_user: bool,
+    actor: &'a str,
+    expected_owner: &'a str,
     repository: RepositoryId,
     resources: Vec<LockResourceDto>,
 }

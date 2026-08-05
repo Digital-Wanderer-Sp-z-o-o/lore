@@ -74,7 +74,14 @@ message StatusResponse {
   repeated Lock locks = 1;
 }
 
-message UnlockRequest { repeated Resource resources = 1; }
+message UnlockRequest {
+  repeated Resource resources = 1;
+
+  // When present, every lock must still belong to this owner. The server uses
+  // the authenticated caller when omitted and permits a different owner only
+  // for repository administrators.
+  optional string expected_owner = 2;
+}
 
 message UnlockResponse {
   // List of resources unlocked

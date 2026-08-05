@@ -89,8 +89,8 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
   }
 
   public unlockResources(
-    owner: string,
-    validateUser: boolean,
+    _actor: string,
+    expectedOwner: string,
     repository: string,
     resources: readonly LockResourceDto[],
     now: number,
@@ -102,8 +102,7 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
       for (const resource of unique) {
         const existing = this.get(repository, resource);
         if (existing === undefined) return { status: "not_found" };
-        if (validateUser && existing.owner_id !== owner)
-          return { status: "not_owned" };
+        if (existing.owner_id !== expectedOwner) return { status: "not_owned" };
       }
       for (const resource of unique) {
         this.ctx.storage.sql.exec(

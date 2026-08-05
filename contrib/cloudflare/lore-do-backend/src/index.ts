@@ -13,7 +13,6 @@ import { MutablePartitionStore } from "./mutable";
 import {
   ValidationError,
   address,
-  boolField,
   boundedArray,
   context,
   fragment,
@@ -243,8 +242,8 @@ async function route(
       const resources = lockResources(input.resources, maxBatch);
       const repository = context(input.repository, "repository");
       const result = await lockStub(env, repository).unlockResources(
-        stringField(input, "owner"),
-        boolField(input, "validateUser"),
+        stringField(input, "actor"),
+        stringField(input, "expectedOwner"),
         repository,
         resources,
         Date.now(),
