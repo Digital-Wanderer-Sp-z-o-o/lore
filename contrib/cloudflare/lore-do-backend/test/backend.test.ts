@@ -234,6 +234,45 @@ describe("Lore Durable Objects backend", () => {
     );
   });
 
+  it("exposes durable recovery audit through the signed repository route", async () => {
+    const recovered = resource(51, "recovered.blend");
+    expect(
+      (
+        await api("/v1/locks/acquire", {
+          owner: "alice",
+          repository: OTHER_PARTITION,
+          resources: [recovered],
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await api("/v1/locks/release", {
+          actor: "admin",
+          expectedOwner: "alice",
+          repository: OTHER_PARTITION,
+          resources: [recovered],
+        })
+      ).status,
+    ).toBe(200);
+
+    const response = await api("/v1/locks/recovery-audit", {
+      repository: OTHER_PARTITION,
+      limit: 10,
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      events: [
+        {
+          actor: "admin",
+          expectedOwner: "alice",
+          repository: OTHER_PARTITION,
+          resources: [recovered],
+        },
+      ],
+    });
+  });
+
   it("renews owned lock leases and expires inactive locks atomically", async () => {
     const repository = PARTITION;
     const locked = resource(43, "lease.blend");
@@ -313,6 +352,9 @@ describe("Lore Durable Objects backend", () => {
       ),
     ).resolves.toEqual({ status: "not_owned" });
     await expect(
+      stub.queryRecoveryAudit(repository, 10),
+    ).resolves.toEqual({ events: [] });
+    await expect(
       stub.checkLocksStatus(repository, [first, second], 1_500, 10_000),
     ).resolves.toHaveLength(2);
 
@@ -329,6 +371,73 @@ describe("Lore Durable Objects backend", () => {
     await expect(
       stub.checkLocksStatus(repository, [first, second], 1_500, 10_000),
     ).resolves.toEqual([]);
+
+    const firstPage = await stub.queryRecoveryAudit(repository, 1);
+    expect(firstPage.events).toEqual([
+      expect.objectContaining({
+        actor: "admin",
+        expectedOwner: "alice",
+        repository,
+        recordedAt: 1_500,
+        resources: [first, second],
+      }),
+    ]);
+    expect(firstPage.nextCursor).toBeUndefined();
+
+    const ownLock = resource(48, "admin-owned.blend");
+    await stub.lockResources("admin", repository, [ownLock], 1_600, 10_000);
+    await stub.unlockResources(
+      "admin",
+      "admin",
+      repository,
+      [ownLock],
+      1_700,
+      10_000,
+    );
+    await expect(stub.queryRecoveryAudit(repository, 10)).resolves.toEqual(
+      firstPage,
+    );
+  });
+
+  it("paginates durable administrative recovery events newest first", async () => {
+    const repository = PARTITION;
+    const first = resource(49, "first-recovery.blend");
+    const second = resource(50, "second-recovery.blend");
+    const stub = env.LOCK_COORDINATOR.getByName("recovery-audit-pagination");
+
+    await stub.lockResources("alice", repository, [first], 1_000, 10_000);
+    await stub.unlockResources(
+      "admin",
+      "alice",
+      repository,
+      [first],
+      1_500,
+      10_000,
+    );
+    await stub.lockResources("bob", repository, [second], 1_600, 10_000);
+    await stub.unlockResources(
+      "admin",
+      "bob",
+      repository,
+      [second],
+      1_700,
+      10_000,
+    );
+
+    const firstPage = await stub.queryRecoveryAudit(repository, 1);
+    expect(firstPage.events).toEqual([
+      expect.objectContaining({ expectedOwner: "bob", resources: [second] }),
+    ]);
+    expect(firstPage.nextCursor).toBeDefined();
+    const secondPage = await stub.queryRecoveryAudit(
+      repository,
+      1,
+      firstPage.nextCursor,
+    );
+    expect(secondPage.events).toEqual([
+      expect.objectContaining({ expectedOwner: "alice", resources: [first] }),
+    ]);
+    expect(secondPage.nextCursor).toBeUndefined();
   });
 });
 

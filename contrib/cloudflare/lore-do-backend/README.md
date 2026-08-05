@@ -8,12 +8,19 @@ DynamoDB and has no D1 binding.
 
 - `ImmutableMetadataShard`: 256 logical SQLite Durable Objects selected by the final hash byte.
 - `MutablePartitionStore`: one SQLite Durable Object per Lore partition, including the null catalog partition.
-- `LockCoordinator`: one SQLite Durable Object so multi-resource acquire/release stays atomic.
+- `LockCoordinator`: one SQLite Durable Object per repository, so multi-resource acquire/release
+  and administrative-recovery audit writes stay atomic without serializing unrelated repositories.
 - `PAYLOADS`: private R2 binding using keys `payloads/v1/<blake3-hash>`.
 
 All non-health requests require an HMAC-SHA256 signature over timestamp, HTTP method, path, and
 SHA-256 body digest. Unknown Worker/DO/R2 failures return retryable `slow_down`; they are never
 translated into missing content.
+
+Successful foreign-owner releases append an immutable recovery event in the same SQLite
+transaction that removes the locks. Failed owner comparisons and normal self-unlock calls do not
+create recovery events. The signed `/v1/locks/recovery-audit` route exposes the repository-scoped
+history in stable newest-first cursor pages; it is a backend surface and does not authorize end
+users by itself.
 
 ## Local validation
 

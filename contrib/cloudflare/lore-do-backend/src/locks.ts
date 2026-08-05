@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 import { DurableObject } from "cloudflare:workers";
-import type { LockDataDto, LockQueryDto, LockResourceDto } from "./contracts";
+import type {
+  LockDataDto,
+  LockQueryDto,
+  LockRecoveryAuditCursorDto,
+  LockRecoveryAuditDto,
+  LockRecoveryAuditPageDto,
+  LockResourceDto,
+} from "./contracts";
 
 interface LockRow extends Record<string, SqlStorageValue> {
   readonly hash: string;
@@ -11,6 +18,15 @@ interface LockRow extends Record<string, SqlStorageValue> {
   readonly description: string;
   readonly owner_id: string;
   readonly locked_at: number;
+}
+
+interface LockRecoveryAuditRow extends Record<string, SqlStorageValue> {
+  readonly event_id: string;
+  readonly actor_id: string;
+  readonly expected_owner_id: string;
+  readonly repository_id: string;
+  readonly resources_json: string;
+  readonly recorded_at: number;
 }
 
 export interface LockMutationResult {
@@ -37,6 +53,16 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
         );
         CREATE INDEX IF NOT EXISTS locks_owner ON locks(owner_id, repository_id, branch_id);
         CREATE INDEX IF NOT EXISTS locks_repository ON locks(repository_id, branch_id, description);
+        CREATE TABLE IF NOT EXISTS lock_recovery_audit (
+          event_id TEXT PRIMARY KEY,
+          actor_id TEXT NOT NULL,
+          expected_owner_id TEXT NOT NULL,
+          repository_id TEXT NOT NULL,
+          resources_json TEXT NOT NULL,
+          recorded_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS lock_recovery_audit_repository_time
+          ON lock_recovery_audit(repository_id, recorded_at DESC, event_id DESC);
       `);
     });
   }
@@ -89,7 +115,7 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
   }
 
   public unlockResources(
-    _actor: string,
+    actor: string,
     expectedOwner: string,
     repository: string,
     resources: readonly LockResourceDto[],
@@ -112,8 +138,41 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
           resource.branch,
         );
       }
+      if (actor !== expectedOwner) {
+        this.ctx.storage.sql.exec(
+          "INSERT INTO lock_recovery_audit(event_id, actor_id, expected_owner_id, repository_id, resources_json, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
+          crypto.randomUUID(),
+          actor,
+          expectedOwner,
+          repository,
+          JSON.stringify(unique),
+          now,
+        );
+      }
       return { status: "ok", resources: unique };
     });
+  }
+
+  public queryRecoveryAudit(
+    repository: string,
+    limit: number,
+    cursor?: LockRecoveryAuditCursorDto,
+  ): LockRecoveryAuditPageDto {
+    const rows = this.queryRecoveryAuditRows(repository, limit + 1, cursor);
+    const hasNextPage = rows.length > limit;
+    const events = rows.slice(0, limit).map(auditFromRow);
+    const last = events.at(-1);
+    return {
+      events,
+      ...(hasNextPage && last !== undefined
+        ? {
+            nextCursor: {
+              recordedAt: last.recordedAt,
+              eventId: last.eventId,
+            },
+          }
+        : {}),
+    };
   }
 
   public checkLocksStatus(
@@ -167,6 +226,34 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
       expiresBefore,
     );
   }
+
+  private queryRecoveryAuditRows(
+    repository: string,
+    limit: number,
+    cursor?: LockRecoveryAuditCursorDto,
+  ): LockRecoveryAuditRow[] {
+    const columns =
+      "event_id, actor_id, expected_owner_id, repository_id, resources_json, recorded_at";
+    if (cursor === undefined) {
+      return this.ctx.storage.sql
+        .exec<LockRecoveryAuditRow>(
+          `SELECT ${columns} FROM lock_recovery_audit WHERE repository_id = ? ORDER BY recorded_at DESC, event_id DESC LIMIT ?`,
+          repository,
+          limit,
+        )
+        .toArray();
+    }
+    return this.ctx.storage.sql
+      .exec<LockRecoveryAuditRow>(
+        `SELECT ${columns} FROM lock_recovery_audit WHERE repository_id = ? AND (recorded_at < ? OR (recorded_at = ? AND event_id < ?)) ORDER BY recorded_at DESC, event_id DESC LIMIT ?`,
+        repository,
+        cursor.recordedAt,
+        cursor.recordedAt,
+        cursor.eventId,
+        limit,
+      )
+      .toArray();
+  }
 }
 
 function deduplicate(resources: readonly LockResourceDto[]): LockResourceDto[] {
@@ -190,6 +277,17 @@ function lockFromRow(row: LockRow): LockDataDto {
     },
     owner: row.owner_id,
     lockedAt: row.locked_at,
+  };
+}
+
+function auditFromRow(row: LockRecoveryAuditRow): LockRecoveryAuditDto {
+  return {
+    eventId: row.event_id,
+    actor: row.actor_id,
+    expectedOwner: row.expected_owner_id,
+    repository: row.repository_id,
+    resources: JSON.parse(row.resources_json) as LockResourceDto[],
+    recordedAt: row.recorded_at,
   };
 }
 

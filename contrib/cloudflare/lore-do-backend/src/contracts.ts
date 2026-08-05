@@ -31,6 +31,25 @@ export interface LockDataDto {
   readonly lockedAt: number;
 }
 
+export interface LockRecoveryAuditDto {
+  readonly eventId: string;
+  readonly actor: string;
+  readonly expectedOwner: string;
+  readonly repository: string;
+  readonly resources: readonly LockResourceDto[];
+  readonly recordedAt: number;
+}
+
+export interface LockRecoveryAuditCursorDto {
+  readonly recordedAt: number;
+  readonly eventId: string;
+}
+
+export interface LockRecoveryAuditPageDto {
+  readonly events: readonly LockRecoveryAuditDto[];
+  readonly nextCursor?: LockRecoveryAuditCursorDto;
+}
+
 export type LockQueryDto =
   | { readonly kind: "hash"; readonly hash: string }
   | { readonly kind: "hashRepository"; readonly hash: string; readonly repository: string }
