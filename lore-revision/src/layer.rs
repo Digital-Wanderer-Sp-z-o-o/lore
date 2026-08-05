@@ -217,25 +217,83 @@ async fn save_config(
     config_path: impl AsRef<Path>,
     config: &LayerConfig,
 ) -> Result<(), LayerError> {
-    let mut config_file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(config_path)
-        .await
-        .internal("Failed to save configuration")?;
-
     let config_string = toml::to_string_pretty(&config).internal("Failed to save configuration")?;
+    persist_config_atomically(config_path.as_ref(), config_string.as_bytes()).await
+}
+
+async fn persist_config_atomically(config_path: &Path, contents: &[u8]) -> Result<(), LayerError> {
+    let temporary_path = temporary_config_path(config_path);
+    let write_result = write_temporary_config(&temporary_path, contents).await;
+    if let Err(error) = write_result {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        return Err(error);
+    }
+
+    if let Err(error) = lore_storage::fs_util::rename_file(temporary_path.as_path(), config_path) {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        return Err(LayerError::internal_with_context(
+            error,
+            "Failed to atomically replace layer configuration",
+        ));
+    }
+
+    if let Some(parent) = config_path.parent() {
+        lore_storage::fs_util::sync_dir(parent).internal("Failed to sync layer configuration")?;
+    }
+    Ok(())
+}
+
+async fn write_temporary_config(path: &Path, contents: &[u8]) -> Result<(), LayerError> {
+    let mut config_file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .await
+        .internal("Failed to create temporary layer configuration")?;
 
     config_file
-        .write_all(config_string.as_bytes())
+        .write_all(contents)
         .await
-        .internal("Failed to save configuration")?;
+        .internal("Failed to write temporary layer configuration")?;
     config_file
         .flush()
         .await
-        .internal("Failed to save configuration")?;
+        .internal("Failed to flush temporary layer configuration")?;
+    config_file
+        .sync_all()
+        .await
+        .internal("Failed to sync temporary layer configuration")?;
     Ok(())
+}
+
+fn temporary_config_path(config_path: &Path) -> PathBuf {
+    let mut file_name = config_path.file_name().unwrap_or_default().to_os_string();
+    file_name.push(format!(".{}.tmp", uuid::Uuid::now_v7()));
+    config_path.with_file_name(file_name)
+}
+
+#[cfg(test)]
+mod config_persistence_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn atomic_persist_replaces_the_config_without_leaving_a_temp_file() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config_path = directory.path().join("layers");
+        std::fs::write(&config_path, b"old config").expect("initial config");
+
+        persist_config_atomically(&config_path, b"new config")
+            .await
+            .expect("atomic config replacement");
+
+        assert_eq!(std::fs::read(&config_path).unwrap(), b"new config");
+        let entries = std::fs::read_dir(directory.path())
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path(), config_path);
+    }
 }
 
 pub fn layer_config_path(repository_path: impl AsRef<Path>) -> PathBuf {
