@@ -60,6 +60,14 @@ export function keyType(value: unknown): number {
   return value;
 }
 
+export function uintField(
+  value: Record<string, unknown>,
+  name: string,
+  max = Number.MAX_SAFE_INTEGER,
+): number {
+  return uint(value[name], name, max);
+}
+
 export function fragment(value: unknown): FragmentDto {
   const input = record(value, "fragment");
   const flags = uint(input.flags, "flags", 0xffff_ffff);

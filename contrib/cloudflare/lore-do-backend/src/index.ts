@@ -4,6 +4,7 @@
 import type {
   AddressDto,
   ApiErrorBody,
+  LockRecoveryAuditCursorDto,
   LockQueryDto,
   LockResourceDto,
 } from "./contracts";
@@ -21,6 +22,7 @@ import {
   record,
   storeMatch,
   stringField,
+  uintField,
 } from "./validation";
 
 export { ImmutableMetadataShard, LockCoordinator, MutablePartitionStore };
@@ -273,6 +275,16 @@ async function route(
         ),
       });
     }
+    case "/v1/locks/recovery-audit": {
+      const repository = context(input.repository, "repository");
+      return Response.json(
+        await lockStub(env, repository).queryRecoveryAudit(
+          repository,
+          auditPageLimit(input),
+          lockRecoveryAuditCursor(input.cursor),
+        ),
+      );
+    }
     default:
       return errorResponse(404, "not_found", "unknown API route");
   }
@@ -467,6 +479,31 @@ function lockQuery(value: unknown): LockQueryDto {
     default:
       throw new ValidationError("unsupported lock query kind");
   }
+}
+
+function auditPageLimit(input: Record<string, unknown>): number {
+  const limit = uintField(input, "limit", 100);
+  if (limit === 0) throw new ValidationError("limit must be between 1 and 100");
+  return limit;
+}
+
+function lockRecoveryAuditCursor(
+  value: unknown,
+): LockRecoveryAuditCursorDto | undefined {
+  if (value === undefined || value === null) return undefined;
+  const cursor = record(value, "cursor");
+  const eventId = stringField(cursor, "eventId");
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[4-7][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      eventId,
+    )
+  ) {
+    throw new ValidationError("cursor eventId must be a UUID");
+  }
+  return {
+    recordedAt: uintField(cursor, "recordedAt"),
+    eventId,
+  };
 }
 
 function lockMutationResponse(result: {
