@@ -29,6 +29,12 @@ interface LockRecoveryAuditRow extends Record<string, SqlStorageValue> {
   readonly recorded_at: number;
 }
 
+interface LockSchemaVersionRow extends Record<string, SqlStorageValue> {
+  readonly version: number;
+}
+
+const CURRENT_LOCK_SCHEMA_VERSION = 2;
+
 export interface LockMutationResult {
   readonly status: "ok" | "not_owned" | "not_found";
   readonly locks?: readonly LockDataDto[];
@@ -39,31 +45,9 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
   public constructor(state: DurableObjectState, env: Cloudflare.Env) {
     super(state, env);
     state.blockConcurrencyWhile(async () => {
-      this.ctx.storage.sql.exec(`
-        CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
-        INSERT OR IGNORE INTO schema_version(version) VALUES (1);
-        CREATE TABLE IF NOT EXISTS locks (
-          hash TEXT NOT NULL,
-          repository_id TEXT NOT NULL,
-          branch_id TEXT NOT NULL,
-          description TEXT NOT NULL,
-          owner_id TEXT NOT NULL,
-          locked_at INTEGER NOT NULL,
-          PRIMARY KEY(hash, repository_id, branch_id)
-        );
-        CREATE INDEX IF NOT EXISTS locks_owner ON locks(owner_id, repository_id, branch_id);
-        CREATE INDEX IF NOT EXISTS locks_repository ON locks(repository_id, branch_id, description);
-        CREATE TABLE IF NOT EXISTS lock_recovery_audit (
-          event_id TEXT PRIMARY KEY,
-          actor_id TEXT NOT NULL,
-          expected_owner_id TEXT NOT NULL,
-          repository_id TEXT NOT NULL,
-          resources_json TEXT NOT NULL,
-          recorded_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS lock_recovery_audit_repository_time
-          ON lock_recovery_audit(repository_id, recorded_at DESC, event_id DESC);
-      `);
+      this.ctx.storage.transactionSync(() => {
+        migrateLockSchema(this.ctx.storage.sql);
+      });
     });
   }
 
@@ -253,6 +237,53 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
         limit,
       )
       .toArray();
+  }
+}
+
+export function migrateLockSchema(sql: SqlStorage): void {
+  sql.exec(
+    "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)",
+  );
+  const current = sql
+    .exec<LockSchemaVersionRow>(
+      "SELECT COALESCE(MAX(version), 0) AS version FROM schema_version",
+    )
+    .one().version;
+  if (current > CURRENT_LOCK_SCHEMA_VERSION) {
+    throw new Error(
+      `lock schema version ${current} is newer than supported version ${CURRENT_LOCK_SCHEMA_VERSION}`,
+    );
+  }
+  if (current < 1) {
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS locks (
+        hash TEXT NOT NULL,
+        repository_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL,
+        description TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        locked_at INTEGER NOT NULL,
+        PRIMARY KEY(hash, repository_id, branch_id)
+      );
+      CREATE INDEX IF NOT EXISTS locks_owner ON locks(owner_id, repository_id, branch_id);
+      CREATE INDEX IF NOT EXISTS locks_repository ON locks(repository_id, branch_id, description);
+      INSERT INTO schema_version(version) VALUES (1);
+    `);
+  }
+  if (current < 2) {
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS lock_recovery_audit (
+        event_id TEXT PRIMARY KEY,
+        actor_id TEXT NOT NULL,
+        expected_owner_id TEXT NOT NULL,
+        repository_id TEXT NOT NULL,
+        resources_json TEXT NOT NULL,
+        recorded_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS lock_recovery_audit_repository_time
+        ON lock_recovery_audit(repository_id, recorded_at DESC, event_id DESC);
+      INSERT INTO schema_version(version) VALUES (2);
+    `);
   }
 }
 

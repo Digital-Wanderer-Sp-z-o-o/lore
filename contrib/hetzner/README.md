@@ -41,11 +41,11 @@ host.
 The checked-in profile requires repository-scoped JWTs issued from existing Rendermoon accounts.
 Put client traffic on WireGuard and allow these ports only from the team VPN CIDR:
 
-| Port | Protocol | Purpose |
-| --- | --- | --- |
-| 41337 | UDP | Lore QUIC |
-| 41337 | TCP | Lore gRPC |
-| 22 | TCP | administration, preferably only over WireGuard |
+| Port  | Protocol | Purpose                                        |
+| ----- | -------- | ---------------------------------------------- |
+| 41337 | UDP      | Lore QUIC                                      |
+| 41337 | TCP      | Lore gRPC                                      |
+| 22    | TCP      | administration, preferably only over WireGuard |
 
 The HTTP health endpoint binds to loopback and is not public. Use `lore://` only inside this private
 test network; that URL scheme intentionally skips certificate verification. JWT protects the Lore
@@ -91,11 +91,20 @@ Create the cache root and start Lore:
 
 ```bash
 sudo install -d -m 0750 /var/lib/lore/cache
-docker compose build
-docker compose up -d
+target_sha="$(git rev-parse HEAD)"
+LORE_SERVER_TAG="$target_sha" docker compose build lore-server
+LORE_SERVER_TAG="$target_sha" docker compose up -d --no-build lore-server
 curl --fail http://127.0.0.1:41339/health_check
 docker compose logs --tail 100 lore-server
 ```
+
+The Git-derived image tag and OCI revision label make the running server
+verifiable and leave an explicit rollback target. After the first bootstrap,
+all updates must follow the separate
+[Cloudflare and Hetzner staging rollout runbook](../cloudflare/STAGING_ROLLOUT.md),
+including the zero-traffic Worker version, signed version-override smoke, and
+parallel server canary on ports `42337`/`42339`. Do not replace the running
+container directly from an untagged local build.
 
 After startup, log in with a Rendermoon API key (or omit the token options for the browser handoff):
 

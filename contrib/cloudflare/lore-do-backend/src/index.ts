@@ -35,7 +35,16 @@ export default {
     const started = Date.now();
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") {
-      return Response.json({ durableObjects: "configured", version: "v1" });
+      return Response.json({
+        status: "ok",
+        apiVersion: "v1",
+        deployment: env.CF_VERSION_METADATA,
+        durableObjects: "configured",
+        capabilities: {
+          lockRecoveryAudit: "v1",
+          lockRecoveryOwnerCas: true,
+        },
+      });
     }
 
     const rawBody = await request.arrayBuffer();
