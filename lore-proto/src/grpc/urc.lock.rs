@@ -214,6 +214,89 @@ impl ::prost::Name for AdminLockResponse {
         "/urc.lock.AdminLockResponse".into()
     }
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RecoveryAuditCursor {
+    /// UUID identifying the final event in the previous page.
+    #[prost(bytes = "bytes", tag = "1")]
+    pub event_id: ::prost::bytes::Bytes,
+    /// Timestamp of the final event in the previous page.
+    #[prost(message, optional, tag = "2")]
+    pub recorded_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+impl ::prost::Name for RecoveryAuditCursor {
+    const NAME: &'static str = "RecoveryAuditCursor";
+    const PACKAGE: &'static str = "urc.lock";
+    fn full_name() -> ::prost::alloc::string::String {
+        "urc.lock.RecoveryAuditCursor".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/urc.lock.RecoveryAuditCursor".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RecoveryAuditEntry {
+    /// Stable UUID of this audit event.
+    #[prost(bytes = "bytes", tag = "1")]
+    pub event_id: ::prost::bytes::Bytes,
+    /// Authenticated user who performed the recovery.
+    #[prost(string, tag = "2")]
+    pub actor: ::prost::alloc::string::String,
+    /// Owner compared atomically before the locks were released.
+    #[prost(string, tag = "3")]
+    pub expected_owner: ::prost::alloc::string::String,
+    /// Exact resources released by the administrative recovery.
+    #[prost(message, repeated, tag = "4")]
+    pub resources: ::prost::alloc::vec::Vec<Resource>,
+    /// Server-side time at which the recovery was persisted.
+    #[prost(message, optional, tag = "5")]
+    pub recorded_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+impl ::prost::Name for RecoveryAuditEntry {
+    const NAME: &'static str = "RecoveryAuditEntry";
+    const PACKAGE: &'static str = "urc.lock";
+    fn full_name() -> ::prost::alloc::string::String {
+        "urc.lock.RecoveryAuditEntry".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/urc.lock.RecoveryAuditEntry".into()
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RecoveryAuditRequest {
+    /// Page size from 1 through 100.
+    #[prost(uint32, tag = "1")]
+    pub limit: u32,
+    /// Exclusive cursor returned by the previous page.
+    #[prost(message, optional, tag = "2")]
+    pub cursor: ::core::option::Option<RecoveryAuditCursor>,
+}
+impl ::prost::Name for RecoveryAuditRequest {
+    const NAME: &'static str = "RecoveryAuditRequest";
+    const PACKAGE: &'static str = "urc.lock";
+    fn full_name() -> ::prost::alloc::string::String {
+        "urc.lock.RecoveryAuditRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/urc.lock.RecoveryAuditRequest".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RecoveryAuditResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub events: ::prost::alloc::vec::Vec<RecoveryAuditEntry>,
+    #[prost(message, optional, tag = "2")]
+    pub next_cursor: ::core::option::Option<RecoveryAuditCursor>,
+}
+impl ::prost::Name for RecoveryAuditResponse {
+    const NAME: &'static str = "RecoveryAuditResponse";
+    const PACKAGE: &'static str = "urc.lock";
+    fn full_name() -> ::prost::alloc::string::String {
+        "urc.lock.RecoveryAuditResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/urc.lock.RecoveryAuditResponse".into()
+    }
+}
 /// Generated client implementations.
 pub mod lock_service_client {
     #![allow(
@@ -417,6 +500,31 @@ pub mod lock_service_client {
                 .insert(GrpcMethod::new("urc.lock.LockService", "AdminLock"));
             self.inner.unary(req, path, codec).await
         }
+        /// Lists durable administrative lock-recovery events for the repository.
+        pub async fn query_recovery_audit(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RecoveryAuditRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RecoveryAuditResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/urc.lock.LockService/QueryRecoveryAudit",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("urc.lock.LockService", "QueryRecoveryAudit"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -458,6 +566,14 @@ pub mod lock_service_server {
             request: tonic::Request<super::AdminLockRequest>,
         ) -> std::result::Result<
             tonic::Response<super::AdminLockResponse>,
+            tonic::Status,
+        >;
+        /// Lists durable administrative lock-recovery events for the repository.
+        async fn query_recovery_audit(
+            &self,
+            request: tonic::Request<super::RecoveryAuditRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RecoveryAuditResponse>,
             tonic::Status,
         >;
     }
@@ -743,6 +859,52 @@ pub mod lock_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = AdminLockSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/urc.lock.LockService/QueryRecoveryAudit" => {
+                    #[allow(non_camel_case_types)]
+                    struct QueryRecoveryAuditSvc<T: LockService>(pub Arc<T>);
+                    impl<
+                        T: LockService,
+                    > tonic::server::UnaryService<super::RecoveryAuditRequest>
+                    for QueryRecoveryAuditSvc<T> {
+                        type Response = super::RecoveryAuditResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::RecoveryAuditRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as LockService>::query_recovery_audit(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = QueryRecoveryAuditSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

@@ -364,6 +364,12 @@ pub trait Lock: Send + Sync {
         resources: &[LockResource],
         expected_owner: Option<&str>,
     ) -> Result<Vec<LockResource>, ProtocolError>;
+
+    /// Query the durable administrative lock-recovery audit.
+    async fn query_recovery_audit(
+        &self,
+        query: &LockRecoveryAuditQuery,
+    ) -> Result<LockRecoveryAuditPage, ProtocolError>;
 }
 
 /// Environment protocol

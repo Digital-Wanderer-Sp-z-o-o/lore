@@ -49,6 +49,9 @@ service LockService {
 
   // Locks resources for another user
   rpc AdminLock(AdminLockRequest) returns (AdminLockResponse);
+
+  // Lists durable administrative lock-recovery events for the repository.
+  rpc QueryRecoveryAudit(RecoveryAuditRequest) returns (RecoveryAuditResponse);
 }
 
 message LockRequest { repeated Resource resources = 1; }
@@ -97,4 +100,42 @@ message AdminLockRequest {
 message AdminLockResponse {
   // List of created locks
   repeated Lock locks = 1;
+}
+
+message RecoveryAuditCursor {
+  // UUID identifying the final event in the previous page.
+  bytes event_id = 1;
+
+  // Timestamp of the final event in the previous page.
+  google.protobuf.Timestamp recorded_at = 2;
+}
+
+message RecoveryAuditEntry {
+  // Stable UUID of this audit event.
+  bytes event_id = 1;
+
+  // Authenticated user who performed the recovery.
+  string actor = 2;
+
+  // Owner compared atomically before the locks were released.
+  string expected_owner = 3;
+
+  // Exact resources released by the administrative recovery.
+  repeated Resource resources = 4;
+
+  // Server-side time at which the recovery was persisted.
+  google.protobuf.Timestamp recorded_at = 5;
+}
+
+message RecoveryAuditRequest {
+  // Page size from 1 through 100.
+  uint32 limit = 1;
+
+  // Exclusive cursor returned by the previous page.
+  optional RecoveryAuditCursor cursor = 2;
+}
+
+message RecoveryAuditResponse {
+  repeated RecoveryAuditEntry events = 1;
+  optional RecoveryAuditCursor next_cursor = 2;
 }

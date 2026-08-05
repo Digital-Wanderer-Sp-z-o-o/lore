@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: MIT
 use async_trait::async_trait;
 use lore_base::types::LockData;
+use lore_base::types::LockRecoveryAuditPage;
+use lore_base::types::LockRecoveryAuditQuery;
 use lore_base::types::LockResource;
 use lore_error_set::prelude::*;
 
 use crate::errors::InvalidArguments;
 use crate::errors::LockNotFound;
 use crate::errors::LockNotOwned;
+use crate::errors::NotSupported;
 use crate::errors::SlowDown;
 use crate::lore::BranchId;
 use crate::lore::Hash;
@@ -21,6 +24,7 @@ pub enum LockError {
     InvalidArguments,
     LockNotFound,
     LockNotOwned,
+    NotSupported,
     SlowDown,
 }
 
@@ -69,4 +73,32 @@ pub trait LockStore: Send + Sync {
         repository: RepositoryId,
         resources: &[LockResource],
     ) -> Result<Vec<LockResource>, LockError>;
+
+    /// Recover resources held by another owner. Stores that cannot persist the
+    /// recovery audit atomically with the owner comparison must reject this
+    /// operation rather than silently falling back to ordinary unlock.
+    async fn recover_resources(
+        &self,
+        _actor_id: &str,
+        _expected_owner_id: &str,
+        _repository: RepositoryId,
+        _resources: &[LockResource],
+    ) -> Result<Vec<LockResource>, LockError> {
+        Err(NotSupported {
+            operation: "durably audited administrative lock recovery".into(),
+        }
+        .into())
+    }
+
+    /// Query durable administrative lock-recovery history.
+    async fn query_recovery_audit(
+        &self,
+        _repository: RepositoryId,
+        _query: &LockRecoveryAuditQuery,
+    ) -> Result<LockRecoveryAuditPage, LockError> {
+        Err(NotSupported {
+            operation: "lock recovery audit history".into(),
+        }
+        .into())
+    }
 }

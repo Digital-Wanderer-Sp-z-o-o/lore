@@ -151,4 +151,6 @@ pub enum LoreCommand {
     RevisionTreeInfo(crate::revision_tree::info::LoreRevisionTreeInfoArgs),
     RevisionTreeNodePath(crate::revision_tree::node_path::LoreRevisionTreeNodePathArgs),
     RevisionTreeAdd(crate::revision_tree::add::LoreRevisionTreeAddArgs),
+    // Append new commands to preserve serialized discriminants used by delegation.
+    LockRecoveryAuditQuery(crate::lock::LoreLockRecoveryAuditQueryArgs),
 }

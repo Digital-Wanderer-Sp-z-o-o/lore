@@ -1558,6 +1558,22 @@ impl Lock for GRPCLock {
             }
         }
     }
+
+    async fn query_recovery_audit(
+        &self,
+        query: &LockRecoveryAuditQuery,
+    ) -> Result<LockRecoveryAuditPage, ProtocolError> {
+        let reconnect_id = self.connection.reconnect.load(Ordering::Relaxed);
+        loop {
+            let result = self.client.read().await.query_recovery_audit(query).await;
+            match result {
+                Err(ProtocolError::Disconnected(_)) => {
+                    self.reconnect(reconnect_id).await?;
+                }
+                result => return result,
+            }
+        }
+    }
 }
 
 /// Environment protocol implementation over gRPC
