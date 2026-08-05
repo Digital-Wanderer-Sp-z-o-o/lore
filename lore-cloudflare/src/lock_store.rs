@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 use async_trait::async_trait;
-use lore_base::error::{LockNotFound, LockNotOwned, SlowDown};
+use lore_base::error::{InvalidArguments, LockNotFound, LockNotOwned, SlowDown};
 use lore_base::types::{BranchId, Hash, LockData, LockResource, RepositoryId};
 use lore_revision::lock::{LockError, LockQuery, LockStore};
 use reqwest::StatusCode;
@@ -49,6 +49,7 @@ impl LockStore for CloudflareLockStore {
     }
 
     async fn query_locks(&self, query: LockQuery) -> Result<Vec<LockData>, LockError> {
+        ensure_shardable_query(&query)?;
         let response: LocksResponse = self
             .client
             .post(
@@ -107,6 +108,19 @@ impl LockStore for CloudflareLockStore {
             .into_iter()
             .map(LockResource::from)
             .collect())
+    }
+}
+
+fn ensure_shardable_query(query: &LockQuery) -> Result<(), LockError> {
+    if matches!(query, LockQuery::Hash(_) | LockQuery::Owner(_)) {
+        Err(InvalidArguments {
+            reason:
+                "global lock queries are not supported by the repository-sharded Cloudflare backend"
+                    .into(),
+        }
+        .into())
+    } else {
+        Ok(())
     }
 }
 
@@ -293,5 +307,16 @@ fn lock_error(error: CloudflareClientError) -> LockError {
         }
         CloudflareClientError::Transport(_) => SlowDown.into(),
         _ => LockError::internal(format!("Cloudflare lock store operation failed: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repository_shards_reject_global_lock_queries_before_http() {
+        assert!(ensure_shardable_query(&LockQuery::Hash(Hash::default())).is_err());
+        assert!(ensure_shardable_query(&LockQuery::Owner("artist".to_owned())).is_err());
     }
 }

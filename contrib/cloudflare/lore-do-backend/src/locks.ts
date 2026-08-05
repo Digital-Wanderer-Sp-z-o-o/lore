@@ -46,8 +46,10 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
     repository: string,
     resources: readonly LockResourceDto[],
     lockedAt: number,
+    leaseDurationMs: number,
   ): LockMutationResult {
     return this.ctx.storage.transactionSync(() => {
+      this.deleteExpired(lockedAt, leaseDurationMs);
       const unique = deduplicate(resources);
       const existingByKey = new Map<string, LockRow>();
       for (const resource of unique) {
@@ -59,7 +61,17 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
       }
       const newlyLocked: LockDataDto[] = [];
       for (const resource of unique) {
-        if (!existingByKey.has(`${resource.hash}:${resource.branch}`)) {
+        if (existingByKey.has(`${resource.hash}:${resource.branch}`)) {
+          this.ctx.storage.sql.exec(
+            "UPDATE locks SET description = ?, locked_at = ? WHERE hash = ? AND repository_id = ? AND branch_id = ? AND owner_id = ?",
+            resource.description,
+            lockedAt,
+            resource.hash,
+            repository,
+            resource.branch,
+            owner,
+          );
+        } else {
           this.ctx.storage.sql.exec(
             "INSERT INTO locks(hash, repository_id, branch_id, description, owner_id, locked_at) VALUES (?, ?, ?, ?, ?, ?)",
             resource.hash,
@@ -81,13 +93,17 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
     validateUser: boolean,
     repository: string,
     resources: readonly LockResourceDto[],
+    now: number,
+    leaseDurationMs: number,
   ): LockMutationResult {
     return this.ctx.storage.transactionSync(() => {
+      this.deleteExpired(now, leaseDurationMs);
       const unique = deduplicate(resources);
       for (const resource of unique) {
         const existing = this.get(repository, resource);
         if (existing === undefined) return { status: "not_found" };
-        if (validateUser && existing.owner_id !== owner) return { status: "not_owned" };
+        if (validateUser && existing.owner_id !== owner)
+          return { status: "not_owned" };
       }
       for (const resource of unique) {
         this.ctx.storage.sql.exec(
@@ -104,14 +120,22 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
   public checkLocksStatus(
     repository: string,
     resources: readonly LockResourceDto[],
+    now: number,
+    leaseDurationMs: number,
   ): LockDataDto[] {
+    this.deleteExpired(now, leaseDurationMs);
     return deduplicate(resources).flatMap((resource) => {
       const row = this.get(repository, resource);
       return row === undefined ? [] : [lockFromRow(row)];
     });
   }
 
-  public queryLocks(query: LockQueryDto): LockDataDto[] {
+  public queryLocks(
+    query: LockQueryDto,
+    now: number,
+    leaseDurationMs: number,
+  ): LockDataDto[] {
+    this.deleteExpired(now, leaseDurationMs);
     const [where, parameters] = querySql(query);
     return this.ctx.storage.sql
       .exec<LockRow>(
@@ -122,7 +146,10 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
       .map(lockFromRow);
   }
 
-  private get(repository: string, resource: LockResourceDto): LockRow | undefined {
+  private get(
+    repository: string,
+    resource: LockResourceDto,
+  ): LockRow | undefined {
     return this.ctx.storage.sql
       .exec<LockRow>(
         "SELECT hash, repository_id, branch_id, description, owner_id, locked_at FROM locks " +
@@ -133,6 +160,14 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
       )
       .toArray()[0];
   }
+
+  private deleteExpired(now: number, leaseDurationMs: number): void {
+    const expiresBefore = now - leaseDurationMs;
+    this.ctx.storage.sql.exec(
+      "DELETE FROM locks WHERE locked_at <= ?",
+      expiresBefore,
+    );
+  }
 }
 
 function deduplicate(resources: readonly LockResourceDto[]): LockResourceDto[] {
@@ -141,28 +176,60 @@ function deduplicate(resources: readonly LockResourceDto[]): LockResourceDto[] {
     unique.set(`${resource.hash}:${resource.branch}`, resource);
   }
   return [...unique.values()].sort((left, right) =>
-    `${left.hash}:${left.branch}`.localeCompare(`${right.hash}:${right.branch}`),
+    `${left.hash}:${left.branch}`.localeCompare(
+      `${right.hash}:${right.branch}`,
+    ),
   );
 }
 
 function lockFromRow(row: LockRow): LockDataDto {
   return {
-    resource: { branch: row.branch_id, hash: row.hash, description: row.description },
+    resource: {
+      branch: row.branch_id,
+      hash: row.hash,
+      description: row.description,
+    },
     owner: row.owner_id,
     lockedAt: row.locked_at,
   };
 }
 
-function querySql(query: LockQueryDto): readonly [string, readonly (string | number)[]] {
+function querySql(
+  query: LockQueryDto,
+): readonly [string, readonly (string | number)[]] {
   switch (query.kind) {
-    case "hash": return ["hash = ?", [query.hash]];
-    case "hashRepository": return ["hash = ? AND repository_id = ?", [query.hash, query.repository]];
-    case "hashRepositoryBranch": return ["hash = ? AND repository_id = ? AND branch_id = ?", [query.hash, query.repository, query.branch]];
-    case "owner": return ["owner_id = ?", [query.owner]];
-    case "ownerRepository": return ["owner_id = ? AND repository_id = ?", [query.owner, query.repository]];
-    case "ownerRepositoryBranch": return ["owner_id = ? AND repository_id = ? AND branch_id = ?", [query.owner, query.repository, query.branch]];
-    case "repository": return ["repository_id = ?", [query.repository]];
-    case "repositoryBranch": return ["repository_id = ? AND branch_id = ?", [query.repository, query.branch]];
-    case "repositoryBranchDescription": return ["repository_id = ? AND branch_id = ? AND description = ?", [query.repository, query.branch, query.description]];
+    case "hash":
+      return ["hash = ?", [query.hash]];
+    case "hashRepository":
+      return ["hash = ? AND repository_id = ?", [query.hash, query.repository]];
+    case "hashRepositoryBranch":
+      return [
+        "hash = ? AND repository_id = ? AND branch_id = ?",
+        [query.hash, query.repository, query.branch],
+      ];
+    case "owner":
+      return ["owner_id = ?", [query.owner]];
+    case "ownerRepository":
+      return [
+        "owner_id = ? AND repository_id = ?",
+        [query.owner, query.repository],
+      ];
+    case "ownerRepositoryBranch":
+      return [
+        "owner_id = ? AND repository_id = ? AND branch_id = ?",
+        [query.owner, query.repository, query.branch],
+      ];
+    case "repository":
+      return ["repository_id = ?", [query.repository]];
+    case "repositoryBranch":
+      return [
+        "repository_id = ? AND branch_id = ?",
+        [query.repository, query.branch],
+      ];
+    case "repositoryBranchDescription":
+      return [
+        "repository_id = ? AND branch_id = ? AND description = ?",
+        [query.repository, query.branch, query.description],
+      ];
   }
 }
