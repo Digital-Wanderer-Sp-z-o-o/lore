@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
 // SPDX-License-Identifier: MIT
 
-import { SELF, env } from "cloudflare:test";
+import { SELF, env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { LockCoordinator, migrateLockSchema } from "../src/locks";
 
 const SECRET = "test-secret";
 const PARTITION = "11".repeat(16);
@@ -12,6 +13,21 @@ const OTHER_CONTEXT = "44".repeat(16);
 const ZERO_HASH = "00".repeat(32);
 
 describe("Lore Durable Objects backend", () => {
+  it("publishes the exact deployment and lock-recovery capabilities", async () => {
+    const response = await SELF.fetch("https://lore.test/health");
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ok",
+      apiVersion: "v1",
+      deployment: { id: expect.any(String) },
+      durableObjects: "configured",
+      capabilities: {
+        lockRecoveryAudit: "v1",
+        lockRecoveryOwnerCas: true,
+      },
+    });
+  });
+
   it("requires a fresh valid HMAC signature", async () => {
     const unsigned = await SELF.fetch("https://lore.test/v1/mutable/load", {
       method: "POST",
@@ -351,9 +367,9 @@ describe("Lore Durable Objects backend", () => {
         10_000,
       ),
     ).resolves.toEqual({ status: "not_owned" });
-    await expect(
-      stub.queryRecoveryAudit(repository, 10),
-    ).resolves.toEqual({ events: [] });
+    await expect(stub.queryRecoveryAudit(repository, 10)).resolves.toEqual({
+      events: [],
+    });
     await expect(
       stub.checkLocksStatus(repository, [first, second], 1_500, 10_000),
     ).resolves.toHaveLength(2);
@@ -438,6 +454,79 @@ describe("Lore Durable Objects backend", () => {
       expect.objectContaining({ expectedOwner: "alice", resources: [first] }),
     ]);
     expect(secondPage.nextCursor).toBeUndefined();
+  });
+
+  it("migrates a version-one lock shard without losing existing locks", async () => {
+    const repository = PARTITION;
+    const existing = resource(52, "existing-before-migration.blend");
+    const stub = env.LOCK_COORDINATOR.getByName("lock-schema-v1-migration");
+    await stub.lockResources("alice", repository, [existing], 1_000, 10_000);
+
+    await runInDurableObject(
+      stub,
+      async (instance: LockCoordinator, state: DurableObjectState) => {
+        expect(instance).toBeInstanceOf(LockCoordinator);
+        state.storage.sql.exec(`
+          DROP TABLE lock_recovery_audit;
+          DELETE FROM schema_version WHERE version = 2;
+        `);
+        state.storage.transactionSync(() => {
+          migrateLockSchema(state.storage.sql);
+        });
+
+        expect(
+          state.storage.sql
+            .exec<{ version: number }>(
+              "SELECT MAX(version) AS version FROM schema_version",
+            )
+            .one().version,
+        ).toBe(2);
+        expect(
+          state.storage.sql
+            .exec<{ count: number }>("SELECT COUNT(*) AS count FROM locks")
+            .one().count,
+        ).toBe(1);
+        expect(
+          state.storage.sql
+            .exec<{ count: number }>(
+              "SELECT COUNT(*) AS count FROM lock_recovery_audit",
+            )
+            .one().count,
+        ).toBe(0);
+
+        state.storage.sql.exec("DELETE FROM schema_version WHERE version = 2");
+        expect(() => migrateLockSchema(state.storage.sql)).not.toThrow();
+        expect(
+          state.storage.sql
+            .exec<{ version: number }>(
+              "SELECT MAX(version) AS version FROM schema_version",
+            )
+            .one().version,
+        ).toBe(2);
+      },
+    );
+
+    await expect(
+      stub.checkLocksStatus(repository, [existing], 1_500, 10_000),
+    ).resolves.toEqual([
+      expect.objectContaining({ owner: "alice", resource: existing }),
+    ]);
+  });
+
+  it("fails closed when a lock shard has a newer schema", async () => {
+    const stub = env.LOCK_COORDINATOR.getByName("lock-schema-future-version");
+    await stub.queryRecoveryAudit(PARTITION, 1);
+    await runInDurableObject(
+      stub,
+      async (_instance: LockCoordinator, state: DurableObjectState) => {
+        state.storage.sql.exec(
+          "INSERT INTO schema_version(version) VALUES (3)",
+        );
+        expect(() => migrateLockSchema(state.storage.sql)).toThrow(
+          "lock schema version 3 is newer than supported version 2",
+        );
+      },
+    );
   });
 });
 

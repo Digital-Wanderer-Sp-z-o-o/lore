@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "check": "wrangler types && tsc --noEmit",
-    "deploy:staging": "wrangler deploy --env staging --minify",
+    "preflight:staging": "npm run check && npm test && wrangler versions upload --env staging --minify --strict --dry-run --outdir dist-do-dry-run",
+    "smoke:staging": "node scripts/smoke-staging.js",
     "test": "vitest run",
-    "types": "wrangler types"
+    "types": "wrangler types",
+    "upload:staging": "wrangler versions upload --env staging --minify --strict"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.19.1",

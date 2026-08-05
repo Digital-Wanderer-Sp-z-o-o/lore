@@ -8,6 +8,7 @@
     "enabled": true,
     "head_sampling_rate": 1,
   },
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "exports": {
     "ImmutableMetadataShard": { "type": "durable-object", "storage": "sqlite" },
     "MutablePartitionStore": { "type": "durable-object", "storage": "sqlite" },
@@ -31,6 +32,7 @@
   "env": {
     "staging": {
       "name": "archigma-lore-do-staging",
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
       "durable_objects": {
         "bindings": [
           {

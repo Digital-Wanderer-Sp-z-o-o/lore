@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
 # SPDX-License-Identifier: MIT
 
+ARG LORE_BUILD_SHA=unknown
+
 FROM rust:slim-trixie AS builder
 
 RUN apt-get update && apt-get install -y \
@@ -18,6 +20,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cp /build/target/release/loreserver /build/loreserver-bin
 
 FROM debian:trixie-slim
+
+ARG LORE_BUILD_SHA
+LABEL org.opencontainers.image.revision=$LORE_BUILD_SHA
+LABEL org.opencontainers.image.source="https://github.com/Digital-Wanderer-Sp-z-o-o/lore"
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \

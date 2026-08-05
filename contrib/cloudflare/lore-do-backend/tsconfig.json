@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
-    "allowJs": false,
+    "allowJs": true,
+    "checkJs": true,
     "exactOptionalPropertyTypes": true,
     "lib": ["ES2024"],
     "module": "ESNext",
@@ -12,7 +13,15 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2024",
-    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-pool-workers/types"]
+    "types": [
+      "./worker-configuration.d.ts",
+      "@cloudflare/vitest-pool-workers/types"
+    ]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": [
+    "scripts/**/*.js",
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "vitest.config.ts"
+  ]
 }

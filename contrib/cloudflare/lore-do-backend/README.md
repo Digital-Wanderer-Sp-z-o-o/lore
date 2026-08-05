@@ -28,7 +28,7 @@ users by itself.
 npm install
 npm run check
 npm test
-npx wrangler deploy --dry-run --env staging
+npm run preflight:staging
 ```
 
 ## Staging deployment
@@ -37,8 +37,14 @@ Create a random secret of at least 32 characters and install it without committi
 
 ```bash
 npx wrangler secret put AUTH_SECRET_ACCESS_KEY --env staging
-npm run deploy:staging
 ```
+
+Do not use `wrangler deploy` for this Worker. It couples upload and immediate
+100% activation. Follow [the staging rollout runbook](../STAGING_ROLLOUT.md):
+upload an immutable version, add it to a 0% deployment, prove its exact version
+and signed recovery-audit capability through a version override, then promote
+it. The runbook records the previous version and separates Worker, server, and
+client rollback decisions.
 
 Install the same value as `LORE_CLOUDFLARE_SHARED_SECRET` in the Hetzner Compose `.env`, build the
 exact reviewed Lore commit, and recreate the service. The old `lore-d1-gateway` is a retained POC;
