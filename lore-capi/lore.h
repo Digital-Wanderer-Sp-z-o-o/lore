@@ -126,6 +126,13 @@ typedef enum lore_error_code_t {
   LORE_ERROR_CODE_SLOW_DOWN = 4,
 } lore_error_code_t;
 
+typedef enum lore_layer_recovery_operation_t {
+  // Resume adding a layer.
+  LORE_LAYER_RECOVERY_OPERATION_ADD = 0,
+  // Resume removing a layer.
+  LORE_LAYER_RECOVERY_OPERATION_REMOVE = 1,
+} lore_layer_recovery_operation_t;
+
 // The kind of value held by a metadata entry.
 typedef enum lore_metadata_type_t {
   // A block of raw bytes.
@@ -2864,6 +2871,25 @@ typedef struct lore_revision_tree_batch_complete_event_data_t {
   enum lore_error_code_t error_code;
 } lore_revision_tree_batch_complete_event_data_t;
 
+typedef struct lore_layer_recovery_event_data_t {
+  // Path in the outer repository where the interrupted mutation operates.
+  struct lore_string_t target_path;
+  // Repository providing the layered content.
+  lore_repository_id_t source_repository;
+  // Path inside the source repository where the layer starts.
+  struct lore_string_t source_path;
+  // Metadata used to match revisions between repositories.
+  struct lore_string_t metadata;
+  // Exact source revision persisted before the interrupted mutation began.
+  struct lore_hash_t revision;
+  // Mutation that must be repeated to resume safely.
+  enum lore_layer_recovery_operation_t operation;
+  // Whether a remove operation must purge the layer files.
+  uint8_t purge;
+  // Whether a remove operation must discard modified files.
+  uint8_t force;
+} lore_layer_recovery_event_data_t;
+
 // An event delivered to a callback. Each variant names a kind of event and
 // carries the data for that event.
 enum lore_event_id_t {
@@ -3322,6 +3348,8 @@ enum lore_event_id_t {
   LORE_EVENT_COMPACTION_END,
   // A batch write call on a revision tree completed as a whole.
   LORE_EVENT_REVISION_TREE_BATCH_COMPLETE,
+  // An interrupted layer mutation that must be resumed.
+  LORE_EVENT_LAYER_RECOVERY,
 };
 typedef uint32_t lore_event_tag_t;
 
@@ -3555,6 +3583,7 @@ typedef struct lore_event_t {
     struct lore_compaction_progress_event_data_t compaction_progress;
     struct lore_compaction_end_event_data_t compaction_end;
     struct lore_revision_tree_batch_complete_event_data_t revision_tree_batch_complete;
+    struct lore_layer_recovery_event_data_t layer_recovery;
   };
 } lore_event_t;
 
