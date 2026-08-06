@@ -34,6 +34,12 @@ feature is enabled for users.
 
 ## Local validation
 
+The development toolchain overrides `undici` to `7.29.0` because the pinned
+Wrangler/Miniflare release otherwise resolves the vulnerable `7.28.0`. Keep
+the override until the upstream dependency resolves at least `7.29.0`, and do
+not change it without a clean `npm audit` plus the Worker runtime tests. The
+staging preflight enforces the high-severity audit gate.
+
 ```bash
 npm install
 npm run check
