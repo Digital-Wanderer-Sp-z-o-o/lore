@@ -3,6 +3,10 @@
 
 import { SELF, env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import {
+  ImmutableMetadataShard,
+  migrateImmutableSchema,
+} from "../src/immutable";
 import { LockCoordinator, migrateLockSchema } from "../src/locks";
 
 const SECRET = "test-secret";
@@ -24,6 +28,8 @@ describe("Lore Durable Objects backend", () => {
       capabilities: {
         lockRecoveryAudit: "v1",
         lockRecoveryOwnerCas: true,
+        obliterationAudit: "v1",
+        resumableObliteration: true,
       },
     });
   });
@@ -167,6 +173,204 @@ describe("Lore Durable Objects backend", () => {
       (await rawApi("GET", `/v1/payload/${payloadHash}`, new Uint8Array()))
         .status,
     ).toBe(404);
+  });
+
+  it("keeps the legacy obliteration contract available for rolling server deploys", async () => {
+    const target = { hash: hash(33), context: CONTEXT };
+    const fragment = { flags: 0, sizePayload: 4, sizeContent: 4 };
+    await api("/v1/immutable/put", {
+      partition: PARTITION,
+      address: target,
+      fragment,
+    });
+    const begun = await api("/v1/immutable/begin-obliteration", {
+      hash: target.hash,
+    });
+    await expect(begun.json()).resolves.toMatchObject({
+      status: "started",
+      fragment,
+    });
+    const removed = await api("/v1/immutable/remove-association", {
+      partition: PARTITION,
+      address: target,
+    });
+    await expect(removed.json()).resolves.toEqual({ remainingAssociations: 0 });
+    expect(
+      (
+        await api("/v1/immutable/finish-obliteration", {
+          hash: target.hash,
+        })
+      ).status,
+    ).toBe(200);
+  });
+
+  it("resumes audited obliteration across every external-I/O crash boundary", async () => {
+    const target = { hash: hash(31), context: CONTEXT };
+    const fragment = { flags: 0, sizePayload: 4, sizeContent: 4 };
+    const payload = new Uint8Array([4, 3, 2, 1]);
+    expect(
+      (await rawApi("PUT", `/v1/payload/${target.hash}`, payload)).status,
+    ).toBe(200);
+    expect(
+      (
+        await api("/v1/immutable/put", {
+          partition: PARTITION,
+          address: target,
+          fragment,
+        })
+      ).status,
+    ).toBe(200);
+
+    const beginBody = await beginObliteration(target, "owner", "corr-first");
+    expect(beginBody).toMatchObject({
+      status: "started",
+      stage: "association_pending",
+      eventId: expect.any(String),
+      fragment,
+    });
+
+    const resumedBeforeRemoval = await beginObliteration(
+      target,
+      "owner",
+      "corr-retry-before-removal",
+    );
+    expect(resumedBeforeRemoval).toMatchObject({
+      status: "resuming",
+      stage: "association_pending",
+      eventId: beginBody.eventId,
+    });
+
+    expect(
+      (
+        await api("/v1/immutable/remove-audited-association", {
+          eventId: beginBody.eventId,
+          partition: PARTITION,
+          address: target,
+        })
+      ).status,
+    ).toBe(200);
+
+    const auditWhilePayloadExists = await obliterationAudit(target);
+    expect(auditWhilePayloadExists.events).toEqual([
+      expect.objectContaining({
+        eventId: beginBody.eventId,
+        actor: "owner",
+        correlationId: "corr-first",
+        repository: PARTITION,
+        address: target,
+        status: "association_removed",
+        remainingAssociations: 0,
+      }),
+    ]);
+
+    expect(
+      (await rawApi("DELETE", `/v1/payload/${target.hash}`, new Uint8Array()))
+        .status,
+    ).toBe(200);
+
+    const resumedAfterPayloadDelete = await beginObliteration(
+      target,
+      "owner",
+      "corr-retry-after-payload",
+    );
+    expect(resumedAfterPayloadDelete).toMatchObject({
+      status: "resuming",
+      stage: "association_removed",
+      eventId: beginBody.eventId,
+      remainingAssociations: 0,
+    });
+
+    expect(
+      (
+        await api("/v1/immutable/finish-audited-obliteration", {
+          eventId: beginBody.eventId,
+          partition: PARTITION,
+          address: target,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await api("/v1/immutable/finish-audited-obliteration", {
+          eventId: beginBody.eventId,
+          partition: PARTITION,
+          address: target,
+        })
+      ).status,
+    ).toBe(200);
+    await expect(beginObliteration(target, "owner", "corr-after-complete"))
+      .resolves.toEqual({ status: "already_obliterated" });
+
+    const completedAudit = await obliterationAudit(target);
+    expect(completedAudit.events).toEqual([
+      expect.objectContaining({
+        eventId: beginBody.eventId,
+        status: "payload_obliterated",
+        remainingAssociations: 0,
+        completedAt: expect.any(Number),
+      }),
+    ]);
+  });
+
+  it("retains shared payloads and completes the audit when another association remains", async () => {
+    const target = { hash: hash(32), context: CONTEXT };
+    const other = { hash: target.hash, context: OTHER_CONTEXT };
+    const fragment = { flags: 0, sizePayload: 4, sizeContent: 4 };
+    await api("/v1/immutable/put", {
+      partition: PARTITION,
+      address: target,
+      fragment,
+    });
+    await api("/v1/immutable/put", {
+      partition: OTHER_PARTITION,
+      address: other,
+      fragment,
+    });
+    const begun = await beginObliteration(target, "owner", "corr-shared");
+    const removal = await api("/v1/immutable/remove-audited-association", {
+      eventId: begun.eventId,
+      partition: PARTITION,
+      address: target,
+    });
+    await expect(removal.json()).resolves.toEqual({ remainingAssociations: 1 });
+    expect(
+      (
+        await api("/v1/immutable/complete-retained-audited-obliteration", {
+          eventId: begun.eventId,
+          partition: PARTITION,
+          address: target,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await api("/v1/immutable/complete-retained-audited-obliteration", {
+          eventId: begun.eventId,
+          partition: PARTITION,
+          address: target,
+        })
+      ).status,
+    ).toBe(200);
+    await expect(beginObliteration(target, "owner", "corr-after-retained"))
+      .resolves.toEqual({ status: "already_obliterated" });
+
+    const stillReadable = await api("/v1/immutable/query", {
+      partition: OTHER_PARTITION,
+      address: other,
+      matchRequested: 3,
+    });
+    await expect(stillReadable.json()).resolves.toMatchObject({
+      matchMade: 3,
+      fragment,
+    });
+    await expect(obliterationAudit(target)).resolves.toMatchObject({
+      events: [
+        expect.objectContaining({
+          status: "payload_retained",
+          remainingAssociations: 1,
+        }),
+      ],
+    });
   });
 
   it("keeps conflicting lock batches all-or-nothing", async () => {
@@ -528,7 +732,84 @@ describe("Lore Durable Objects backend", () => {
       },
     );
   });
+
+  it("migrates immutable shards additively and fails closed on a future schema", async () => {
+    const stub = env.IMMUTABLE_METADATA.getByName("immutable-schema-migration");
+    const target = { hash: hash(60), context: CONTEXT };
+    await stub.put(PARTITION, target, {
+      flags: 0,
+      sizePayload: 4,
+      sizeContent: 4,
+    });
+
+    await runInDurableObject(
+      stub,
+      async (instance: ImmutableMetadataShard, state: DurableObjectState) => {
+        expect(instance).toBeInstanceOf(ImmutableMetadataShard);
+        state.storage.sql.exec(`
+          DROP TABLE obliteration_audit;
+          DELETE FROM schema_version WHERE version = 2;
+        `);
+        state.storage.transactionSync(() => {
+          migrateImmutableSchema(state.storage.sql);
+        });
+        expect(
+          state.storage.sql
+            .exec<{ count: number }>("SELECT COUNT(*) AS count FROM fragments")
+            .one().count,
+        ).toBe(1);
+        expect(
+          state.storage.sql
+            .exec<{ count: number }>("SELECT COUNT(*) AS count FROM associations")
+            .one().count,
+        ).toBe(1);
+
+        state.storage.sql.exec("INSERT INTO schema_version(version) VALUES (3)");
+        expect(() => migrateImmutableSchema(state.storage.sql)).toThrow(
+          "immutable schema version 3 is newer than supported version 2",
+        );
+      },
+    );
+  });
 });
+
+interface ObliterationStartBody {
+  readonly status: string;
+  readonly eventId?: string;
+  readonly stage?: string;
+  readonly remainingAssociations?: number;
+}
+
+interface ObliterationAuditBody {
+  readonly events: readonly Record<string, unknown>[];
+}
+
+async function beginObliteration(
+  address: { readonly hash: string; readonly context: string },
+  actor: string,
+  correlationId: string,
+): Promise<ObliterationStartBody> {
+  const response = await api("/v1/immutable/begin-audited-obliteration", {
+    partition: PARTITION,
+    address,
+    actor,
+    correlationId,
+  });
+  expect(response.status).toBe(200);
+  return response.json() as Promise<ObliterationStartBody>;
+}
+
+async function obliterationAudit(
+  address: { readonly hash: string; readonly context: string },
+): Promise<ObliterationAuditBody> {
+  const response = await api("/v1/immutable/obliteration-audit", {
+    repository: PARTITION,
+    address,
+    limit: 100,
+  });
+  expect(response.status).toBe(200);
+  return response.json() as Promise<ObliterationAuditBody>;
+}
 
 function hash(byte: number): string {
   return byte.toString(16).padStart(2, "0").repeat(32);

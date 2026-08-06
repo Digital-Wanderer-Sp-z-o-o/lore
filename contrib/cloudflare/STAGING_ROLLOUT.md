@@ -128,13 +128,16 @@ export LORE_WORKER_BASE_URL='https://archigma-lore-do-staging.damian-podwiazka.w
 export LORE_WORKER_NAME='archigma-lore-do-staging'
 export LORE_WORKER_VERSION_ID="$new_worker_version"
 export LORE_SMOKE_REPOSITORY_ID="$dedicated_canary_repository_id"
+export LORE_SMOKE_OBLITERATION_HASH="$dedicated_canary_obliteration_hash"
+export LORE_SMOKE_OBLITERATION_CONTEXT="$dedicated_canary_obliteration_context"
 npm --prefix contrib/cloudflare/lore-do-backend run smoke:staging
 unset LORE_CLOUDFLARE_SHARED_SECRET
 ```
 
 The smoke fails unless Cloudflare honors the version override, `/health`
-returns the exact requested version ID and both lock-recovery capabilities, and
-the HMAC-signed recovery-audit query succeeds.
+returns the exact requested version ID, lock-recovery capabilities, audited/resumable
+obliteration capabilities, and both HMAC-signed audit queries succeed. The obliteration hash and
+context identify an exact canary address that is only queried; this smoke does not remove content.
 
 ## 5. Promote or abandon the Worker
 
@@ -159,8 +162,10 @@ npx wrangler versions deploy "$oldWorkerVersion@100%" `
 
 This explicit version deployment is preferred over an implicit `wrangler
 rollback`. It is valid only because this rollout leaves the Durable Object
-class lifecycle and storage types unchanged. The added `lock_recovery_audit`
-table is backward-compatible and ignored by the old Worker.
+class lifecycle and storage types unchanged. The additive `lock_recovery_audit` and
+`obliteration_audit` tables are backward-compatible and ignored by the old Worker. The new Worker
+keeps the old obliteration request contracts during the ordered rolling deployment; only the new
+server uses audited routes.
 
 ## 6. Build and run the server canary
 
@@ -217,6 +222,12 @@ Then run, in order: allowed-user repository list, denied-user repository list,
 small canary clone and verification, self lock/release, two-owner contention,
 administrator owner-CAS recovery, and paginated audit read. Any authorization
 or integrity mismatch is a rollback condition.
+
+Before enabling Desktop obliteration, verify that the new server calls only the audited
+obliteration routes and that no legacy obliteration route appears in Worker logs. Run the
+interruption/retry smoke against a disposable canary address, then confirm the signed audit query
+shows `payload_obliterated` (or `payload_retained` for the shared-association case) with the expected
+repository, actor, correlation ID, and completion timestamp.
 
 ## 8. Server rollback
 

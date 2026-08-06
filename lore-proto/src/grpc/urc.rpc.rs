@@ -58,6 +58,129 @@ impl ::prost::Name for ServerInfoResponse {
         "/urc.rpc.ServerInfoResponse".into()
     }
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ObliterationAuditCursor {
+    #[prost(bytes = "bytes", tag = "1")]
+    pub event_id: ::prost::bytes::Bytes,
+    #[prost(message, optional, tag = "2")]
+    pub recorded_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+impl ::prost::Name for ObliterationAuditCursor {
+    const NAME: &'static str = "ObliterationAuditCursor";
+    const PACKAGE: &'static str = "urc.rpc";
+    fn full_name() -> ::prost::alloc::string::String {
+        "urc.rpc.ObliterationAuditCursor".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/urc.rpc.ObliterationAuditCursor".into()
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ObliterationAuditEntry {
+    #[prost(bytes = "bytes", tag = "1")]
+    pub event_id: ::prost::bytes::Bytes,
+    #[prost(string, tag = "2")]
+    pub actor: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub correlation_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "4")]
+    pub address: ::core::option::Option<super::model::Address>,
+    #[prost(enumeration = "ObliterationAuditStatus", tag = "5")]
+    pub status: i32,
+    #[prost(uint64, optional, tag = "6")]
+    pub remaining_associations: ::core::option::Option<u64>,
+    #[prost(message, optional, tag = "7")]
+    pub recorded_at: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(message, optional, tag = "8")]
+    pub completed_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+impl ::prost::Name for ObliterationAuditEntry {
+    const NAME: &'static str = "ObliterationAuditEntry";
+    const PACKAGE: &'static str = "urc.rpc";
+    fn full_name() -> ::prost::alloc::string::String {
+        "urc.rpc.ObliterationAuditEntry".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/urc.rpc.ObliterationAuditEntry".into()
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct QueryObliterationAuditRequest {
+    #[prost(message, optional, tag = "1")]
+    pub address: ::core::option::Option<super::model::Address>,
+    #[prost(uint32, tag = "2")]
+    pub limit: u32,
+    #[prost(message, optional, tag = "3")]
+    pub cursor: ::core::option::Option<ObliterationAuditCursor>,
+}
+impl ::prost::Name for QueryObliterationAuditRequest {
+    const NAME: &'static str = "QueryObliterationAuditRequest";
+    const PACKAGE: &'static str = "urc.rpc";
+    fn full_name() -> ::prost::alloc::string::String {
+        "urc.rpc.QueryObliterationAuditRequest".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/urc.rpc.QueryObliterationAuditRequest".into()
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct QueryObliterationAuditResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub events: ::prost::alloc::vec::Vec<ObliterationAuditEntry>,
+    #[prost(message, optional, tag = "2")]
+    pub next_cursor: ::core::option::Option<ObliterationAuditCursor>,
+}
+impl ::prost::Name for QueryObliterationAuditResponse {
+    const NAME: &'static str = "QueryObliterationAuditResponse";
+    const PACKAGE: &'static str = "urc.rpc";
+    fn full_name() -> ::prost::alloc::string::String {
+        "urc.rpc.QueryObliterationAuditResponse".into()
+    }
+    fn type_url() -> ::prost::alloc::string::String {
+        "/urc.rpc.QueryObliterationAuditResponse".into()
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ObliterationAuditStatus {
+    Unspecified = 0,
+    AssociationPending = 1,
+    AssociationRemoved = 2,
+    PayloadRetained = 3,
+    PayloadObliterated = 4,
+}
+impl ObliterationAuditStatus {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "OBLITERATION_AUDIT_STATUS_UNSPECIFIED",
+            Self::AssociationPending => "OBLITERATION_AUDIT_STATUS_ASSOCIATION_PENDING",
+            Self::AssociationRemoved => "OBLITERATION_AUDIT_STATUS_ASSOCIATION_REMOVED",
+            Self::PayloadRetained => "OBLITERATION_AUDIT_STATUS_PAYLOAD_RETAINED",
+            Self::PayloadObliterated => "OBLITERATION_AUDIT_STATUS_PAYLOAD_OBLITERATED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "OBLITERATION_AUDIT_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
+            "OBLITERATION_AUDIT_STATUS_ASSOCIATION_PENDING" => {
+                Some(Self::AssociationPending)
+            }
+            "OBLITERATION_AUDIT_STATUS_ASSOCIATION_REMOVED" => {
+                Some(Self::AssociationRemoved)
+            }
+            "OBLITERATION_AUDIT_STATUS_PAYLOAD_RETAINED" => Some(Self::PayloadRetained),
+            "OBLITERATION_AUDIT_STATUS_PAYLOAD_OBLITERATED" => {
+                Some(Self::PayloadObliterated)
+            }
+            _ => None,
+        }
+    }
+}
 /// Generated client implementations.
 pub mod admin_service_client {
     #![allow(
@@ -197,6 +320,32 @@ pub mod admin_service_client {
                 .insert(GrpcMethod::new("urc.rpc.AdminService", "Obliterate"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn query_obliteration_audit(
+            &mut self,
+            request: impl tonic::IntoRequest<super::QueryObliterationAuditRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::QueryObliterationAuditResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/urc.rpc.AdminService/QueryObliterationAudit",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("urc.rpc.AdminService", "QueryObliterationAudit"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -224,6 +373,13 @@ pub mod admin_service_server {
             request: tonic::Request<super::super::model::ObliterateRequest>,
         ) -> std::result::Result<
             tonic::Response<super::super::model::ObliterateResponse>,
+            tonic::Status,
+        >;
+        async fn query_obliteration_audit(
+            &self,
+            request: tonic::Request<super::QueryObliterationAuditRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::QueryObliterationAuditResponse>,
             tonic::Status,
         >;
     }
@@ -380,6 +536,55 @@ pub mod admin_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ObliterateSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/urc.rpc.AdminService/QueryObliterationAudit" => {
+                    #[allow(non_camel_case_types)]
+                    struct QueryObliterationAuditSvc<T: AdminService>(pub Arc<T>);
+                    impl<
+                        T: AdminService,
+                    > tonic::server::UnaryService<super::QueryObliterationAuditRequest>
+                    for QueryObliterationAuditSvc<T> {
+                        type Response = super::QueryObliterationAuditResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::QueryObliterationAuditRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AdminService>::query_obliteration_audit(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = QueryObliterationAuditSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

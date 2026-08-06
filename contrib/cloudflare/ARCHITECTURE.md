@@ -102,6 +102,10 @@ The Cloudflare implementation must preserve:
 - payload-less put when the hash already exists and only a new association is needed;
 - copy between partitions/contexts without duplicating payload bytes;
 - two-phase obliteration and typed obliterating/obliterated results;
+- a durable per-address obliteration lifecycle record carrying actor, correlation ID, repository,
+  stage, and shared-payload outcome;
+- idempotent recovery after interruption before association removal, before R2 deletion, or before
+  final metadata publication;
 - deletion of a shared R2 payload only when no valid association still needs it;
 - `SlowDown` for transient overload, timeouts, R2 `429`, and retryable `5xx` responses;
 - verify, heal, flush, compact, and lifecycle semantics required by the trait.
@@ -405,6 +409,8 @@ separate clone/sync fan-out harness; the chaos client alone is not a bandwidth b
 - Make schema migrations additive and rolling-deploy compatible.
 - Back up Durable Object state using the platform's recovery facilities and test restore.
 - Monitor shard size, request rate, error type, retry exhaustion, and obliteration completion.
+- Alert on pending obliteration audit records and any use of the legacy unaudited routes after the
+  audited server has been promoted.
 - Document rollback separately for Worker/DO schema, derived Lore Server, and client releases.
 
 ## Explicit non-goals and prohibited shortcuts

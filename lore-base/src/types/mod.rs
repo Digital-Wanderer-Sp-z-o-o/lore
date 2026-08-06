@@ -3,6 +3,7 @@
 pub mod branch_types;
 pub mod fragment_flags;
 pub mod lock_types;
+pub mod obliteration_types;
 pub mod store_types;
 pub mod typed_bytes;
 pub mod verify_types;
@@ -15,6 +16,7 @@ pub use branch_types::*;
 use bytes::Bytes;
 pub use fragment_flags::*;
 pub use lock_types::*;
+pub use obliteration_types::*;
 use rand::Rng;
 use rand::distr::Distribution;
 use rand::distr::StandardUniform;

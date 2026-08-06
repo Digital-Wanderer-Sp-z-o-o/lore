@@ -7,6 +7,7 @@ import type {
   LockRecoveryAuditCursorDto,
   LockQueryDto,
   LockResourceDto,
+  ObliterationAuditCursorDto,
 } from "./contracts";
 import { ImmutableMetadataShard } from "./immutable";
 import { LockCoordinator } from "./locks";
@@ -43,6 +44,8 @@ export default {
         capabilities: {
           lockRecoveryAudit: "v1",
           lockRecoveryOwnerCas: true,
+          obliterationAudit: "v1",
+          resumableObliteration: true,
         },
       });
     }
@@ -168,14 +171,14 @@ async function route(
     case "/v1/immutable/begin-obliteration": {
       const targetHash = hash(input.hash);
       return Response.json(
-        await immutableStub(env, targetHash).beginObliteration(targetHash),
+        await immutableStub(env, targetHash).beginLegacyObliteration(targetHash),
       );
     }
     case "/v1/immutable/remove-association": {
       const partition = context(input.partition, "partition");
       const target = address(input.address);
       return Response.json(
-        await immutableStub(env, target.hash).removeAssociation(
+        await immutableStub(env, target.hash).removeLegacyAssociation(
           partition,
           target,
         ),
@@ -183,7 +186,7 @@ async function route(
     }
     case "/v1/immutable/cancel-obliteration": {
       const targetHash = hash(input.hash);
-      await immutableStub(env, targetHash).cancelObliteration(
+      await immutableStub(env, targetHash).cancelLegacyObliteration(
         targetHash,
         fragment(input.fragment),
       );
@@ -191,8 +194,66 @@ async function route(
     }
     case "/v1/immutable/finish-obliteration": {
       const targetHash = hash(input.hash);
-      await immutableStub(env, targetHash).finishObliteration(targetHash);
+      await immutableStub(env, targetHash).finishLegacyObliteration(targetHash);
       return Response.json({ ok: true });
+    }
+    case "/v1/immutable/begin-audited-obliteration": {
+      const partition = context(input.partition, "partition");
+      const target = address(input.address);
+      return Response.json(
+        await immutableStub(env, target.hash).beginObliteration({
+          partition,
+          address: target,
+          actor: boundedStringField(input, "actor", 256),
+          correlationId: boundedStringField(input, "correlationId", 128),
+          recordedAt: Date.now(),
+        }),
+      );
+    }
+    case "/v1/immutable/remove-audited-association": {
+      const partition = context(input.partition, "partition");
+      const target = address(input.address);
+      return Response.json(
+        await immutableStub(env, target.hash).removeAssociation(
+          uuidField(input, "eventId"),
+          partition,
+          target,
+        ),
+      );
+    }
+    case "/v1/immutable/complete-retained-audited-obliteration": {
+      const partition = context(input.partition, "partition");
+      const target = address(input.address);
+      await immutableStub(env, target.hash).completeRetained(
+        uuidField(input, "eventId"),
+        partition,
+        target,
+        Date.now(),
+      );
+      return Response.json({ ok: true });
+    }
+    case "/v1/immutable/finish-audited-obliteration": {
+      const partition = context(input.partition, "partition");
+      const target = address(input.address);
+      await immutableStub(env, target.hash).finishObliteration(
+        uuidField(input, "eventId"),
+        partition,
+        target,
+        Date.now(),
+      );
+      return Response.json({ ok: true });
+    }
+    case "/v1/immutable/obliteration-audit": {
+      const repository = context(input.repository, "repository");
+      const target = address(input.address);
+      return Response.json(
+        await immutableStub(env, target.hash).queryObliterationAudit(
+          repository,
+          target,
+          auditPageLimit(input),
+          obliterationAuditCursor(input.cursor),
+        ),
+      );
     }
     case "/v1/immutable/association-count": {
       const targetHash = hash(input.hash);
@@ -496,23 +557,54 @@ function auditPageLimit(input: Record<string, unknown>): number {
   return limit;
 }
 
+function boundedStringField(
+  input: Record<string, unknown>,
+  name: string,
+  maxLength: number,
+): string {
+  const value = stringField(input, name);
+  if (value.length === 0 || value.length > maxLength) {
+    throw new ValidationError(`${name} must contain between 1 and ${maxLength} characters`);
+  }
+  return value;
+}
+
+function uuidField(input: Record<string, unknown>, name: string): string {
+  const value = stringField(input, name);
+  if (!isUuid(value)) throw new ValidationError(`${name} must be a UUID`);
+  return value;
+}
+
+function obliterationAuditCursor(
+  value: unknown,
+): ObliterationAuditCursorDto | undefined {
+  if (value === undefined || value === null) return undefined;
+  const cursor = record(value, "cursor");
+  return {
+    recordedAt: uintField(cursor, "recordedAt"),
+    eventId: uuidField(cursor, "eventId"),
+  };
+}
+
 function lockRecoveryAuditCursor(
   value: unknown,
 ): LockRecoveryAuditCursorDto | undefined {
   if (value === undefined || value === null) return undefined;
   const cursor = record(value, "cursor");
   const eventId = stringField(cursor, "eventId");
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[4-7][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-      eventId,
-    )
-  ) {
+  if (!isUuid(eventId)) {
     throw new ValidationError("cursor eventId must be a UUID");
   }
   return {
     recordedAt: uintField(cursor, "recordedAt"),
     eventId,
   };
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[4-7][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+    value,
+  );
 }
 
 function lockMutationResponse(result: {

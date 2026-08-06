@@ -30,6 +30,7 @@ use crate::errors::SlowDown;
 use crate::store_types::StoreMatch;
 use crate::store_types::StoreObliterateStats;
 use crate::store_types::StoreQueryResult;
+use lore_base::types::{ObliterationAuditPage, ObliterationAuditQuery};
 
 #[error_set(clone)]
 pub enum StoreError {
@@ -349,6 +350,19 @@ pub trait ImmutableStore: Any + Send + Sync {
         address: Address,
         stats: Arc<StoreObliterateStats>,
     ) -> Result<(), StoreError>;
+
+    /// Query the durable administrative obliteration history for one exact address.
+    async fn query_obliteration_audit(
+        self: Arc<Self>,
+        _partition: Partition,
+        _address: Address,
+        _query: &ObliterationAuditQuery,
+    ) -> Result<ObliterationAuditPage, StoreError> {
+        Err(NotSupported {
+            operation: "query obliteration audit".into(),
+        }
+        .into())
+    }
 
     /// Evict fragments from the store until the given max capacity is reached.
     /// When `sync_data` is true, data is synced to the storage media (fsync).

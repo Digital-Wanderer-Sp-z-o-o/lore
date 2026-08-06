@@ -22,6 +22,16 @@ create recovery events. The signed `/v1/locks/recovery-audit` route exposes the 
 history in stable newest-first cursor pages; it is a backend surface and does not authorize end
 users by itself.
 
+Audited obliteration uses an additive immutable-shard schema migration. Starting an operation
+stores its actor, correlation ID, repository, address, original fragment metadata, and recovery
+stage in the same SQLite transaction that marks the fragment as obliterating. Association removal
+and final metadata changes update that durable lifecycle record atomically. If Lore Server or R2
+communication stops between phases, the next request resumes from the recorded stage; shared R2
+payloads are retained while any association remains. The original obliteration routes remain
+available only for old-server compatibility during the ordered Worker-before-server rollout. New
+servers use the explicitly audited routes, and legacy route traffic must remain zero before the
+feature is enabled for users.
+
 ## Local validation
 
 ```bash

@@ -3,11 +3,14 @@ syntax = "proto3";
 package urc.rpc;
 
 import "model.proto";
+import "google/protobuf/timestamp.proto";
 
 service AdminService {
   rpc ServerInfo(urc.rpc.ServerInfoRequest)
     returns (urc.rpc.ServerInfoResponse);
-    rpc Obliterate(urc.model.ObliterateRequest) returns (urc.model.ObliterateResponse);
+  rpc Obliterate(urc.model.ObliterateRequest) returns (urc.model.ObliterateResponse);
+  rpc QueryObliterationAudit(QueryObliterationAuditRequest)
+    returns (QueryObliterationAuditResponse);
 }
 
 message ServerInfoRequest {}
@@ -25,4 +28,39 @@ message ServerInfoResponse {
   repeated string features = 2;
   map<string, string> settings = 3;
   HostInfo host = 4;
+}
+
+enum ObliterationAuditStatus {
+  OBLITERATION_AUDIT_STATUS_UNSPECIFIED = 0;
+  OBLITERATION_AUDIT_STATUS_ASSOCIATION_PENDING = 1;
+  OBLITERATION_AUDIT_STATUS_ASSOCIATION_REMOVED = 2;
+  OBLITERATION_AUDIT_STATUS_PAYLOAD_RETAINED = 3;
+  OBLITERATION_AUDIT_STATUS_PAYLOAD_OBLITERATED = 4;
+}
+
+message ObliterationAuditCursor {
+  bytes event_id = 1;
+  google.protobuf.Timestamp recorded_at = 2;
+}
+
+message ObliterationAuditEntry {
+  bytes event_id = 1;
+  string actor = 2;
+  string correlation_id = 3;
+  urc.model.Address address = 4;
+  ObliterationAuditStatus status = 5;
+  optional uint64 remaining_associations = 6;
+  google.protobuf.Timestamp recorded_at = 7;
+  optional google.protobuf.Timestamp completed_at = 8;
+}
+
+message QueryObliterationAuditRequest {
+  urc.model.Address address = 1;
+  uint32 limit = 2;
+  optional ObliterationAuditCursor cursor = 3;
+}
+
+message QueryObliterationAuditResponse {
+  repeated ObliterationAuditEntry events = 1;
+  optional ObliterationAuditCursor next_cursor = 2;
 }
