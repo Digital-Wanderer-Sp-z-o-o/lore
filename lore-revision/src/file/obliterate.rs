@@ -190,22 +190,13 @@ pub async fn obliterate_address(
 ) -> Result<(), ObliterateError> {
     let stats = Arc::new(StoreObliterateStats::default());
 
+    obliterate_remote_if_configured(repository.clone(), address).await?;
+
     repository
         .immutable_store()
         .obliterate(repository.id, address, stats.clone())
         .await
         .forward::<ObliterateError>(&format!("Failed to obliterate an address: {address}"))?;
-
-    if let Ok(remote) = repository.remote().await
-        && let Ok(admin) = remote.admin(repository.id).await
-    {
-        admin
-            .obliterate(address)
-            .await
-            .forward::<ObliterateError>(&format!(
-                "Failed to obliterate a remote address: {address}"
-            ))?;
-    }
 
     event::LoreEvent::FileObliterate(LoreFileObliterateEventData {
         address,
@@ -215,4 +206,125 @@ pub async fn obliterate_address(
     .send();
 
     Ok(())
+}
+
+async fn obliterate_remote_if_configured(
+    repository: Arc<RepositoryContext>,
+    address: Address,
+) -> Result<(), ObliterateError> {
+    let remote = match repository.remote().await {
+        Ok(remote) => remote,
+        Err(lore_transport::ProtocolError::NoRemote(_)) => return Ok(()),
+        Err(error) => {
+            return Err(error).forward::<ObliterateError>(
+                "Failed to connect to the remote before local obliteration",
+            );
+        }
+    };
+
+    let admin = remote
+        .admin(repository.id)
+        .await
+        .forward::<ObliterateError>("Failed to authorize remote obliteration")?;
+    admin
+        .obliterate(address)
+        .await
+        .forward::<ObliterateError>(&format!("Failed to obliterate a remote address: {address}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use lore_base::types::Context;
+    use lore_storage::Fragment;
+    use lore_storage::ImmutableStore;
+    use lore_storage::StoreMatch;
+
+    use super::*;
+    use crate::errors::Disconnected;
+    use crate::errors::NoRemote;
+    use crate::repository::RepositoryContext;
+    use crate::repository::RepositoryFormat;
+
+    async fn repository_with_payload(
+        remote: Result<Arc<lore_transport::Connection>, lore_transport::ProtocolError>,
+    ) -> (
+        Arc<RepositoryContext>,
+        Arc<dyn ImmutableStore>,
+        crate::lore::RepositoryId,
+        Address,
+        Bytes,
+    ) {
+        let (immutable_store, mutable_store) = crate::repository::create_client_memory_stores()
+            .await
+            .expect("create in-memory stores");
+        let repository_id = rand::random();
+        let payload = Bytes::from_static(b"must survive a failed remote preflight");
+        let address = Address {
+            hash: lore_storage::hash::hash_slice(&payload),
+            context: rand::random::<Context>(),
+        };
+        immutable_store
+            .clone()
+            .put(
+                repository_id,
+                address,
+                Fragment {
+                    flags: 0,
+                    size_payload: payload.len() as u32,
+                    size_content: payload.len() as u64,
+                },
+                Some(payload.clone()),
+                false,
+            )
+            .await
+            .expect("seed local payload");
+        let repository = Arc::new(RepositoryContext::new(
+            None,
+            immutable_store.clone(),
+            mutable_store,
+            repository_id,
+            Default::default(),
+            remote,
+            Arc::default(),
+            RepositoryFormat::Lore,
+        ));
+        (repository, immutable_store, repository_id, address, payload)
+    }
+
+    #[tokio::test]
+    async fn remote_connection_failure_preserves_local_payload() {
+        let (repository, immutable_store, repository_id, address, payload) =
+            repository_with_payload(Err(lore_transport::ProtocolError::from(Disconnected))).await;
+
+        let error = obliterate_address(repository, address)
+            .await
+            .expect_err("remote failure must stop obliteration");
+
+        assert!(matches!(error, ObliterateError::Disconnected(_)));
+        let (_, stored_payload) = immutable_store
+            .get(repository_id, address, StoreMatch::MatchFull)
+            .await
+            .expect("local payload must remain readable");
+        assert_eq!(stored_payload, payload);
+    }
+
+    #[tokio::test]
+    async fn explicitly_offline_repository_obliterates_local_payload() {
+        let (repository, immutable_store, repository_id, address, _) =
+            repository_with_payload(Err(lore_transport::ProtocolError::from(NoRemote))).await;
+
+        let execution = Arc::new(crate::interface::ExecutionContext::default())
+            as Arc<dyn std::any::Any + Send + Sync>;
+        lore_base::runtime::LORE_CONTEXT
+            .scope(execution, obliterate_address(repository, address))
+            .await
+            .expect("offline repository may obliterate its local payload");
+
+        let error = immutable_store
+            .get(repository_id, address, StoreMatch::MatchFull)
+            .await
+            .expect_err("obliterated payload must no longer be readable");
+        assert!(error.is_payload_not_found());
+    }
 }
