@@ -49,7 +49,7 @@ Clients connect directly to the public hostname with TLS 1.3:
 | 22   | TCP      | key-only administration                      |
 
 The HTTP health endpoint stays on loopback and is not public. Clients must use
-`lores://lore.3destate.pl:443`; plain `lore://` intentionally skips server-certificate validation
+`lores://lore.rendermoon.com:443`; plain `lore://` intentionally skips server-certificate validation
 and is not supported by this deployment. JWT remains the application authorization boundary, while
 the publicly trusted certificate authenticates and encrypts the transport.
 
@@ -57,12 +57,12 @@ The host firewall exposes only the four ports above. SSH must keep password auth
 root's password locked, and the reviewed ED25519 key as the sole administrative credential. Do not
 publish Docker, the loopback health endpoint, or internal replication ports.
 
-Before starting LORE, create an unproxied DNS `A` record for `lore.3destate.pl`, pointing to the
+Before starting LORE, create an unproxied DNS `A` record for `lore.rendermoon.com`, pointing to the
 server's public IPv4 address, and issue a certificate whose live files are:
 
 ```text
-/etc/letsencrypt/live/lore.3destate.pl/fullchain.pem
-/etc/letsencrypt/live/lore.3destate.pl/privkey.pem
+/etc/letsencrypt/live/lore.rendermoon.com/fullchain.pem
+/etc/letsencrypt/live/lore.rendermoon.com/privkey.pem
 ```
 
 The Compose service mounts `/etc/letsencrypt` read-only. Install a Certbot deploy hook that restarts
@@ -121,7 +121,7 @@ docker compose logs --tail 100 lore-server
 ```
 
 Before promotion, inspect the certificate from an external client, run an authenticated
-create/clone/push/verify canary through `lores://lore.3destate.pl:443`, and prove that connecting by
+create/clone/push/verify canary through `lores://lore.rendermoon.com:443`, and prove that connecting by
 the bare IP fails hostname validation. Keep the prior container image and configuration available
 until these checks pass.
 
@@ -161,7 +161,7 @@ become the result. For example, four machines can each supply 20 clients for the
 
 ```powershell
 .\contrib\hetzner\scale-clone.ps1 `
-  -RemoteUrl lores://lore.3destate.pl:443/blender-scale `
+  -RemoteUrl lores://lore.rendermoon.com:443/blender-scale `
   -ViewFile D:\lore-tests\blender-scale.view `
   -Concurrency 1,10,20
 ```
