@@ -217,8 +217,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("cargo:rustc-link-arg=-Wl,-install_name,@rpath/{dylib_name}");
     }
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
-        // Hack around EXE and DLL having the same file name for PDB file
-        println!("cargo:rustc-link-arg-cdylib=/PDB:{profile_dir}\\lore.dll.pdb");
+        // The complete LORE cdylib can exceed MSVC's PDB database size limit
+        // in debug builds. LORE itself does not require a linker PDB; Rust
+        // dependency metadata remains available to downstream crates.
+        println!("cargo:rustc-link-arg-cdylib=/PDB:NONE");
     }
 
     Ok(())
