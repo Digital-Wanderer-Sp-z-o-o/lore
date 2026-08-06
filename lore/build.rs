@@ -220,7 +220,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         // The complete LORE cdylib can exceed MSVC's PDB database size limit
         // in debug builds. LORE itself does not require a linker PDB; Rust
         // dependency metadata remains available to downstream crates.
-        println!("cargo:rustc-link-arg-cdylib=/PDB:NONE");
+        println!("cargo:rustc-link-arg-cdylib=/DEBUG:NONE");
     }
 
     Ok(())

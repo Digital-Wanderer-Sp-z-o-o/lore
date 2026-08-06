@@ -8,13 +8,24 @@
 host = "127.0.0.1"
 
 [server.quic]
-host = "10.80.0.10"
+host = "0.0.0.0"
+port = 443
+verify_client_certs = false
 idle_timeout = 300_000
 handler_timeout_seconds = 300
 
+[server.quic.certificate]
+cert_file = "/etc/letsencrypt/live/lore.3destate.pl/fullchain.pem"
+pkey_file = "/etc/letsencrypt/live/lore.3destate.pl/privkey.pem"
+
 [server.grpc]
-host = "10.80.0.10"
+host = "0.0.0.0"
+port = 443
 request_handler_timeout_seconds = 300
+
+[server.grpc.certificate]
+cert_file = "/etc/letsencrypt/live/lore.3destate.pl/fullchain.pem"
+pkey_file = "/etc/letsencrypt/live/lore.3destate.pl/privkey.pem"
 
 [server.auth]
 jwt_issuer = "https://rendermoon-staging.fly.dev"
