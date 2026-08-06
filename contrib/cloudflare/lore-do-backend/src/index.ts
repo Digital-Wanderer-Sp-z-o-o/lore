@@ -15,6 +15,7 @@ import { MutablePartitionStore } from "./mutable";
 import {
   ValidationError,
   address,
+  boolField,
   boundedArray,
   context,
   fragment,
@@ -171,14 +172,14 @@ async function route(
     case "/v1/immutable/begin-obliteration": {
       const targetHash = hash(input.hash);
       return Response.json(
-        await immutableStub(env, targetHash).beginLegacyObliteration(targetHash),
+        await immutableStub(env, targetHash).beginObliteration(targetHash),
       );
     }
     case "/v1/immutable/remove-association": {
       const partition = context(input.partition, "partition");
       const target = address(input.address);
       return Response.json(
-        await immutableStub(env, target.hash).removeLegacyAssociation(
+        await immutableStub(env, target.hash).removeAssociation(
           partition,
           target,
         ),
@@ -186,7 +187,7 @@ async function route(
     }
     case "/v1/immutable/cancel-obliteration": {
       const targetHash = hash(input.hash);
-      await immutableStub(env, targetHash).cancelLegacyObliteration(
+      await immutableStub(env, targetHash).cancelObliteration(
         targetHash,
         fragment(input.fragment),
       );
@@ -194,14 +195,14 @@ async function route(
     }
     case "/v1/immutable/finish-obliteration": {
       const targetHash = hash(input.hash);
-      await immutableStub(env, targetHash).finishLegacyObliteration(targetHash);
+      await immutableStub(env, targetHash).finishObliteration(targetHash);
       return Response.json({ ok: true });
     }
     case "/v1/immutable/begin-audited-obliteration": {
       const partition = context(input.partition, "partition");
       const target = address(input.address);
       return Response.json(
-        await immutableStub(env, target.hash).beginObliteration({
+        await immutableStub(env, target.hash).beginAuditedObliteration({
           partition,
           address: target,
           actor: boundedStringField(input, "actor", 256),
@@ -214,7 +215,7 @@ async function route(
       const partition = context(input.partition, "partition");
       const target = address(input.address);
       return Response.json(
-        await immutableStub(env, target.hash).removeAssociation(
+        await immutableStub(env, target.hash).removeAuditedAssociation(
           uuidField(input, "eventId"),
           partition,
           target,
@@ -224,7 +225,7 @@ async function route(
     case "/v1/immutable/complete-retained-audited-obliteration": {
       const partition = context(input.partition, "partition");
       const target = address(input.address);
-      await immutableStub(env, target.hash).completeRetained(
+      await immutableStub(env, target.hash).completeRetainedAuditedObliteration(
         uuidField(input, "eventId"),
         partition,
         target,
@@ -235,7 +236,7 @@ async function route(
     case "/v1/immutable/finish-audited-obliteration": {
       const partition = context(input.partition, "partition");
       const target = address(input.address);
-      await immutableStub(env, target.hash).finishObliteration(
+      await immutableStub(env, target.hash).finishAuditedObliteration(
         uuidField(input, "eventId"),
         partition,
         target,
@@ -313,14 +314,36 @@ async function route(
     case "/v1/locks/release": {
       const resources = lockResources(input.resources, maxBatch);
       const repository = context(input.repository, "repository");
-      const result = await lockStub(env, repository).unlockResources(
-        stringField(input, "actor"),
-        stringField(input, "expectedOwner"),
-        repository,
-        resources,
-        Date.now(),
-        lockLeaseDurationMs(env),
-      );
+      const request = lockReleaseRequest(input);
+      const stub = lockStub(env, repository);
+      const now = Date.now();
+      const leaseDurationMs = lockLeaseDurationMs(env);
+      const result = request.kind === "legacy"
+        ? await legacyLockRelease(
+            stub,
+            request,
+            repository,
+            resources,
+            now,
+            leaseDurationMs,
+          )
+        : request.actor === request.expectedOwner
+          ? await stub.unlockResources(
+              request.actor,
+              true,
+              repository,
+              resources,
+              now,
+              leaseDurationMs,
+            )
+          : await stub.recoverResources(
+              request.actor,
+              request.expectedOwner,
+              repository,
+              resources,
+              now,
+              leaseDurationMs,
+            );
       return lockMutationResponse(result);
     }
     case "/v1/locks/status": {
@@ -555,6 +578,64 @@ function auditPageLimit(input: Record<string, unknown>): number {
   const limit = uintField(input, "limit", 100);
   if (limit === 0) throw new ValidationError("limit must be between 1 and 100");
   return limit;
+}
+
+type LockReleaseRequest =
+  | {
+      readonly kind: "legacy";
+      readonly owner: string;
+      readonly validateUser: boolean;
+    }
+  | {
+      readonly kind: "owner-cas";
+      readonly actor: string;
+      readonly expectedOwner: string;
+    };
+
+function lockReleaseRequest(input: Record<string, unknown>): LockReleaseRequest {
+  const hasLegacyFields = input.owner !== undefined || input.validateUser !== undefined;
+  const hasOwnerCasFields =
+    input.actor !== undefined || input.expectedOwner !== undefined;
+  if (hasLegacyFields === hasOwnerCasFields) {
+    throw new ValidationError(
+      "lock release requires exactly one legacy or owner-CAS identity shape",
+    );
+  }
+  return hasLegacyFields
+    ? {
+        kind: "legacy",
+        owner: stringField(input, "owner"),
+        validateUser: boolField(input, "validateUser"),
+      }
+    : {
+        kind: "owner-cas",
+        actor: stringField(input, "actor"),
+        expectedOwner: stringField(input, "expectedOwner"),
+      };
+}
+
+async function legacyLockRelease(
+  stub: DurableObjectStub<LockCoordinator>,
+  request: Extract<LockReleaseRequest, { readonly kind: "legacy" }>,
+  repository: string,
+  resources: readonly LockResourceDto[],
+  now: number,
+  leaseDurationMs: number,
+) {
+  console.warn(
+    JSON.stringify({
+      event: "lore_legacy_lock_release",
+      validateUser: request.validateUser,
+    }),
+  );
+  return stub.unlockResources(
+    request.owner,
+    request.validateUser,
+    repository,
+    resources,
+    now,
+    leaseDurationMs,
+  );
 }
 
 function boundedStringField(

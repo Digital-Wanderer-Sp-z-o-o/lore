@@ -11,19 +11,21 @@ const repositoryId = requiredHex("LORE_SMOKE_REPOSITORY_ID", 16);
 const obliterationHash = requiredHex("LORE_SMOKE_OBLITERATION_HASH", 32);
 const obliterationContext = requiredHex("LORE_SMOKE_OBLITERATION_CONTEXT", 16);
 const secret = requiredString("LORE_CLOUDFLARE_SHARED_SECRET");
+const phase = requiredPhase();
 const versionOverride = `${workerName}="${versionId}"`;
 
 await verifyHealth();
-const auditEventCount = await verifySignedRecoveryAudit();
-const obliterationAuditEventCount = await verifySignedObliterationAudit();
+const result = phase === "zero-traffic"
+  ? await verifyRollingCompatibility()
+  : await verifyPostPromotionAudit();
 console.log(
   JSON.stringify({
     status: "ok",
+    phase,
     workerName,
     versionId,
     repositoryId,
-    auditEventCount,
-    obliterationAuditEventCount,
+    ...result,
   }),
 );
 
@@ -70,8 +72,47 @@ async function verifySignedRecoveryAudit() {
   );
 }
 
+async function verifyRollingCompatibility() {
+  const lockResult = await signedJson(
+    "/v1/locks/query",
+    { query: { kind: "repository", repository: repositoryId } },
+    "legacy-compatible lock query",
+  );
+  if (!Array.isArray(lockResult.locks)) {
+    throw new Error("legacy-compatible lock query omitted its locks array");
+  }
+  const associationResult = await signedJson(
+    "/v1/immutable/association-count",
+    { hash: obliterationHash },
+    "legacy-compatible association count",
+  );
+  if (associationResult.count !== 0) {
+    throw new Error("dedicated canary address unexpectedly has associations");
+  }
+  return {
+    lockCount: lockResult.locks.length,
+    associationCount: associationResult.count,
+  };
+}
+
+async function verifyPostPromotionAudit() {
+  return {
+    auditEventCount: await verifySignedRecoveryAudit(),
+    obliterationAuditEventCount: await verifySignedObliterationAudit(),
+  };
+}
+
 /** @param {string} path @param {Record<string, unknown>} input @param {string} operation */
 async function signedAuditEventCount(path, input, operation) {
+  const result = await signedJson(path, input, operation);
+  if (!Array.isArray(result.events)) {
+    throw new Error(`${operation} omitted its events array`);
+  }
+  return result.events.length;
+}
+
+/** @param {string} path @param {Record<string, unknown>} input @param {string} operation */
+async function signedJson(path, input, operation) {
   const body = Buffer.from(JSON.stringify(input), "utf8");
   const timestamp = Math.floor(Date.now() / 1_000).toString();
   const digest = createHash("sha256").update(body).digest("hex");
@@ -89,14 +130,13 @@ async function signedAuditEventCount(path, input, operation) {
     },
   });
   const result = await jsonObject(response, operation);
-  if (!Array.isArray(result.events)) {
-    throw new Error(`${operation} omitted its events array`);
-  }
-  return result.events.length;
+  return result;
 }
 
 function versionHeaders() {
-  return { "Cloudflare-Workers-Version-Overrides": versionOverride };
+  return phase === "zero-traffic"
+    ? { "Cloudflare-Workers-Version-Overrides": versionOverride }
+    : {};
 }
 
 /** @param {Response} response @param {string} operation */
@@ -149,6 +189,16 @@ function requiredUuid(name) {
     )
   ) {
     throw new Error(`${name} must be a UUID`);
+  }
+  return value;
+}
+
+function requiredPhase() {
+  const value = requiredString("LORE_SMOKE_PHASE");
+  if (value !== "zero-traffic" && value !== "post-promotion") {
+    throw new Error(
+      "LORE_SMOKE_PHASE must be zero-traffic or post-promotion",
+    );
   }
   return value;
 }

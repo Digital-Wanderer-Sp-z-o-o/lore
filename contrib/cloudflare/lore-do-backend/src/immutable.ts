@@ -134,7 +134,9 @@ export class ImmutableMetadataShard extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  public beginObliteration(request: ObliterationBeginRequest): ObliterationStart {
+  public beginAuditedObliteration(
+    request: ObliterationBeginRequest,
+  ): ObliterationStart {
     return this.ctx.storage.transactionSync(() => {
       const { partition, address, actor, correlationId, recordedAt } = request;
       const existing = this.metadata(address.hash);
@@ -196,7 +198,7 @@ export class ImmutableMetadataShard extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  public beginLegacyObliteration(hash: string): {
+  public beginObliteration(hash: string): {
     readonly status: "started" | "already_obliterating" | "not_found";
     readonly fragment?: FragmentDto;
   } {
@@ -215,7 +217,7 @@ export class ImmutableMetadataShard extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  public removeAssociation(
+  public removeAuditedAssociation(
     eventId: string,
     partition: string,
     address: AddressDto,
@@ -249,7 +251,7 @@ export class ImmutableMetadataShard extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  public removeLegacyAssociation(
+  public removeAssociation(
     partition: string,
     address: AddressDto,
   ): AssociationRemoval {
@@ -270,7 +272,7 @@ export class ImmutableMetadataShard extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  public completeRetained(
+  public completeRetainedAuditedObliteration(
     eventId: string,
     partition: string,
     address: AddressDto,
@@ -297,7 +299,7 @@ export class ImmutableMetadataShard extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  public cancelLegacyObliteration(hash: string, fragment: FragmentDto): void {
+  public cancelObliteration(hash: string, fragment: FragmentDto): void {
     this.ctx.storage.sql.exec(
       "UPDATE fragments SET flags = ?, size_payload = ?, size_content = ? WHERE hash = ?",
       fragment.flags,
@@ -307,7 +309,7 @@ export class ImmutableMetadataShard extends DurableObject<Cloudflare.Env> {
     );
   }
 
-  public finishObliteration(
+  public finishAuditedObliteration(
     eventId: string,
     partition: string,
     address: AddressDto,
@@ -332,7 +334,7 @@ export class ImmutableMetadataShard extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  public finishLegacyObliteration(hash: string): void {
+  public finishObliteration(hash: string): void {
     this.ctx.storage.sql.exec(
       "UPDATE fragments SET flags = ?, size_payload = 0, size_content = 0 WHERE hash = ?",
       OBLITERATED,

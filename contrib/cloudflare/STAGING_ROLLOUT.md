@@ -116,9 +116,8 @@ exactly those two IDs and percentages.
 
 Run the signed smoke from the repository root on a trusted machine that already
 has the shared secret, normally the Hetzner staging host. Use a dedicated empty
-canary repository ID; the audit query intentionally activates its lock Durable
-Object and therefore exercises the `1 -> 2` schema path without touching a
-user's locks.
+canary repository ID and address so the compatibility reads do not touch a
+user's locks or metadata.
 
 ```bash
 set -a
@@ -127,6 +126,7 @@ set +a
 export LORE_WORKER_BASE_URL='https://archigma-lore-do-staging.damian-podwiazka.workers.dev'
 export LORE_WORKER_NAME='archigma-lore-do-staging'
 export LORE_WORKER_VERSION_ID="$new_worker_version"
+export LORE_SMOKE_PHASE='zero-traffic'
 export LORE_SMOKE_REPOSITORY_ID="$dedicated_canary_repository_id"
 export LORE_SMOKE_OBLITERATION_HASH="$dedicated_canary_obliteration_hash"
 export LORE_SMOKE_OBLITERATION_CONTEXT="$dedicated_canary_obliteration_context"
@@ -135,9 +135,16 @@ unset LORE_CLOUDFLARE_SHARED_SECRET
 ```
 
 The smoke fails unless Cloudflare honors the version override, `/health`
-returns the exact requested version ID, lock-recovery capabilities, audited/resumable
-obliteration capabilities, and both HMAC-signed audit queries succeed. The obliteration hash and
-context identify an exact canary address that is only queried; this smoke does not remove content.
+returns the exact requested version ID and advertised capabilities, and the
+new top-level Worker can complete HMAC-signed reads through the version-one
+lock and immutable RPC contracts.
+
+This zero-traffic check does **not** prove a new Durable Object RPC method or
+schema migration. Durable Object updates are eventually consistent, and a
+version-overridden Worker can still reach the previously deployed Durable
+Object code. Keep all existing RPC method names, signatures, and HTTP request
+shapes compatible in both directions during a rolling deployment; add new
+behavior under distinct method names.
 
 ## 5. Promote or abandon the Worker
 
@@ -153,7 +160,24 @@ Invoke-RestMethod `
 ```
 
 The normal health response must now expose `$newWorkerVersion`. If the canary
-or promotion fails before the new server is active, abandon it explicitly:
+health succeeds, run the post-promotion smoke from the trusted host. It sends
+normal traffic without a version override and is the first gate that may call
+the new audit RPCs and activate the additive `1 -> 2` schema migration:
+
+```bash
+export LORE_SMOKE_PHASE='post-promotion'
+for attempt in $(seq 1 12); do
+  npm --prefix contrib/cloudflare/lore-do-backend run smoke:staging && break
+  test "$attempt" -lt 12 || exit 1
+  sleep 5
+done
+unset LORE_CLOUDFLARE_SHARED_SECRET
+```
+
+The bounded retry allows Durable Object code propagation to converge. Do not
+start the new Lore Server unless both signed audit queries succeed. If the
+zero-traffic check or post-promotion gate fails before the new server is
+active, abandon the Worker explicitly:
 
 ```powershell
 npx wrangler versions deploy "$oldWorkerVersion@100%" `
@@ -164,8 +188,9 @@ This explicit version deployment is preferred over an implicit `wrangler
 rollback`. It is valid only because this rollout leaves the Durable Object
 class lifecycle and storage types unchanged. The additive `lock_recovery_audit` and
 `obliteration_audit` tables are backward-compatible and ignored by the old Worker. The new Worker
-keeps the old obliteration request contracts during the ordered rolling deployment; only the new
-server uses audited routes.
+keeps old Durable Object RPC names and signatures, legacy lock-release and
+obliteration request contracts, and additive schemas during the ordered
+rolling deployment; only the new server uses audited routes.
 
 ## 6. Build and run the server canary
 
@@ -262,6 +287,8 @@ Copy the accepted evidence summary into the Archigma LORE Desktop pilot plan.
 ## Platform references
 
 - [Cloudflare version overrides](https://developers.cloudflare.com/workers/versions-and-deployments/version-overrides/)
+- [Cloudflare Durable Object update consistency](https://developers.cloudflare.com/durable-objects/platform/known-issues/)
+- [Cloudflare Worker RPC compatibility](https://developers.cloudflare.com/workers/runtime-apis/rpc/)
 - [Cloudflare Worker rollbacks and binding limits](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/)
 - [Worker version metadata binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/)
 - [Durable Object class exports](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/)

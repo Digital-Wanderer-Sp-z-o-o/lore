@@ -493,6 +493,83 @@ describe("Lore Durable Objects backend", () => {
     });
   });
 
+  it("accepts the legacy lock release wire shape during rolling deploys", async () => {
+    const locked = resource(53, "legacy-release.blend");
+    await api("/v1/locks/acquire", {
+      owner: "alice",
+      repository: PARTITION,
+      resources: [locked],
+    });
+
+    const released = await api("/v1/locks/release", {
+      owner: "alice",
+      validateUser: true,
+      repository: PARTITION,
+      resources: [locked],
+    });
+    expect(released.status).toBe(200);
+
+    const status = await api("/v1/locks/status", {
+      repository: PARTITION,
+      resources: [locked],
+    });
+    await expect(status.json()).resolves.toEqual({ locks: [] });
+  });
+
+  it("rejects ambiguous lock release identity shapes", async () => {
+    const response = await api("/v1/locks/release", {
+      owner: "alice",
+      validateUser: true,
+      actor: "admin",
+      expectedOwner: "alice",
+      repository: PARTITION,
+      resources: [resource(55, "ambiguous-release.blend")],
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("keeps version-one LockCoordinator RPC signatures callable", async () => {
+    const repository = PARTITION;
+    const locked = resource(54, "v1-rpc.blend");
+    const stub = env.LOCK_COORDINATOR.getByName("v1-rpc-contract");
+
+    await expect(
+      stub.lockResources("alice", repository, [locked], 1_000),
+    ).resolves.toMatchObject({ status: "ok", locks: [{ owner: "alice" }] });
+    await expect(
+      stub.lockResources("alice", repository, [locked], 2_000),
+    ).resolves.toEqual({ status: "ok", locks: [] });
+    await expect(stub.checkLocksStatus(repository, [locked])).resolves.toEqual([
+      expect.objectContaining({ owner: "alice", lockedAt: 1_000 }),
+    ]);
+    await expect(
+      stub.queryLocks({ kind: "repository", repository }),
+    ).resolves.toHaveLength(1);
+    await expect(
+      stub.unlockResources("alice", true, repository, [locked]),
+    ).resolves.toMatchObject({ status: "ok", resources: [locked] });
+  });
+
+  it("keeps version-one ImmutableMetadataShard RPC signatures callable", async () => {
+    const target = { hash: hash(56), context: CONTEXT };
+    const fragment = { flags: 0, sizePayload: 16, sizeContent: 16 };
+    const stub = env.IMMUTABLE_METADATA.getByName("v1-immutable-rpc-contract");
+
+    await stub.put(PARTITION, target, fragment);
+    await expect(stub.beginObliteration(target.hash)).resolves.toMatchObject({
+      status: "started",
+      fragment,
+    });
+    await stub.cancelObliteration(target.hash, fragment);
+    await expect(stub.beginObliteration(target.hash)).resolves.toMatchObject({
+      status: "started",
+    });
+    await expect(
+      stub.removeAssociation(PARTITION, target),
+    ).resolves.toEqual({ remainingAssociations: 0 });
+    await stub.finishObliteration(target.hash);
+  });
+
   it("renews owned lock leases and expires inactive locks atomically", async () => {
     const repository = PARTITION;
     const locked = resource(43, "lease.blend");
@@ -562,7 +639,7 @@ describe("Lore Durable Objects backend", () => {
       10_000,
     );
     await expect(
-      stub.unlockResources(
+      stub.recoverResources(
         "admin",
         "bob",
         repository,
@@ -571,6 +648,18 @@ describe("Lore Durable Objects backend", () => {
         10_000,
       ),
     ).resolves.toEqual({ status: "not_owned" });
+    await runInDurableObject(stub, async (instance: LockCoordinator) => {
+      expect(() =>
+        instance.recoverResources(
+          "alice",
+          "alice",
+          repository,
+          [first, second],
+          1_500,
+          10_000,
+        ),
+      ).toThrow("administrative recovery requires a foreign owner");
+    });
     await expect(stub.queryRecoveryAudit(repository, 10)).resolves.toEqual({
       events: [],
     });
@@ -579,7 +668,7 @@ describe("Lore Durable Objects backend", () => {
     ).resolves.toHaveLength(2);
 
     await expect(
-      stub.unlockResources(
+      stub.recoverResources(
         "admin",
         "alice",
         repository,
@@ -608,7 +697,7 @@ describe("Lore Durable Objects backend", () => {
     await stub.lockResources("admin", repository, [ownLock], 1_600, 10_000);
     await stub.unlockResources(
       "admin",
-      "admin",
+      true,
       repository,
       [ownLock],
       1_700,
@@ -626,7 +715,7 @@ describe("Lore Durable Objects backend", () => {
     const stub = env.LOCK_COORDINATOR.getByName("recovery-audit-pagination");
 
     await stub.lockResources("alice", repository, [first], 1_000, 10_000);
-    await stub.unlockResources(
+    await stub.recoverResources(
       "admin",
       "alice",
       repository,
@@ -635,7 +724,7 @@ describe("Lore Durable Objects backend", () => {
       10_000,
     );
     await stub.lockResources("bob", repository, [second], 1_600, 10_000);
-    await stub.unlockResources(
+    await stub.recoverResources(
       "admin",
       "bob",
       repository,
