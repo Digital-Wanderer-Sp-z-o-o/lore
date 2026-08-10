@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Epic Games, Inc.
 // SPDX-License-Identifier: MIT
 use async_trait::async_trait;
-use lore_base::error::NotSupported;
 use lore_base::types::RepositoryId;
 use lore_proto::auth::ExchangeExternalTokenForUserTokenRequest;
 use lore_proto::auth::ExchangeUserTokenForMultiresourceTokenRequest;
 use lore_proto::auth::GetAuthSessionRequest;
 use lore_proto::auth::GetUserIdRequest;
 use lore_proto::auth::GetUserInfoRequest;
+use lore_proto::auth::RefreshAuthSessionRequest;
 use lore_proto::auth::StartAuthSessionRequest;
+use lore_proto::auth::UserToken;
 use lore_proto::auth::urc_auth_api_client::UrcAuthApiClient;
 
 use crate::error::ProtocolError;
@@ -64,6 +65,18 @@ fn set_auth_header<T>(request: &mut tonic::Request<T>, token: &str) -> Result<()
     header.set_sensitive(true);
     request.metadata_mut().append("authorization", header);
     Ok(())
+}
+
+fn authentication_token(token: UserToken) -> AuthenticationToken {
+    AuthenticationToken {
+        token: token.user_token,
+        user_id: token.user_id,
+        user_name: token.user_name,
+        expires_ms: token.expires_at.max(0) as u64,
+        // Populated by orchestration layer via JWT decode, not the proto response.
+        acceptable_root_domains: Vec::new(),
+        refresh_token: token.refresh_token,
+    }
 }
 
 /// Authentication implementation using UCS Auth API gRPC service.
@@ -122,15 +135,7 @@ impl Authentication for UcsAuthentication {
             .map_err(ProtocolError::from)?;
 
         match res.into_inner().user_token {
-            Some(token) => Ok(Some(AuthenticationToken {
-                token: token.user_token,
-                user_id: token.user_id,
-                user_name: token.user_name,
-                expires_ms: token.expires_at.max(0) as u64,
-                // Populated by orchestration layer via JWT decode, not the proto response
-                acceptable_root_domains: Vec::new(),
-                refresh_token: None,
-            })),
+            Some(token) => Ok(Some(authentication_token(token))),
             None => Ok(None),
         }
     }
@@ -158,26 +163,27 @@ impl Authentication for UcsAuthentication {
             .user_token
             .ok_or_else(|| ProtocolError::internal("empty user token in exchange response"))?;
 
-        Ok(AuthenticationToken {
-            token: user_token.user_token,
-            user_id: user_token.user_id,
-            user_name: user_token.user_name,
-            expires_ms: user_token.expires_at.max(0) as u64,
-            // Populated by orchestration layer via JWT decode, not the proto response
-            acceptable_root_domains: Vec::new(),
-            refresh_token: None,
-        })
+        Ok(authentication_token(user_token))
     }
 
     async fn refresh_authentication(
         &self,
-        _auth_url: &str,
-        _refresh_token: &str,
+        auth_url: &str,
+        refresh_token: &str,
         _correlation_id: &str,
     ) -> Result<AuthenticationToken, ProtocolError> {
-        Err(ProtocolError::from(NotSupported {
-            operation: "refresh_authentication".to_string(),
-        }))
+        let mut client = connect_client(auth_url).await?;
+        let mut request = tonic::Request::new(RefreshAuthSessionRequest {});
+        set_auth_header(&mut request, refresh_token)?;
+        let response = client
+            .refresh_auth_session(request)
+            .await
+            .map_err(ProtocolError::from)?;
+        let token = response
+            .into_inner()
+            .user_token
+            .ok_or_else(|| ProtocolError::internal("empty user token in refresh response"))?;
+        Ok(authentication_token(token))
     }
 
     async fn exchange_for_repository(
@@ -333,13 +339,18 @@ mod tests {
         assert_eq!(rid, "urc-00000000000000000000000000000000");
     }
 
-    #[tokio::test]
-    async fn refresh_returns_not_supported() {
-        let auth = UcsAuthentication;
-        let result = auth
-            .refresh_authentication("ucs-auth://auth.example.com", "refresh-tok", "corr-1")
-            .await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().is_not_supported());
+    #[test]
+    fn authentication_token_preserves_refresh_credential() {
+        let token = authentication_token(UserToken {
+            user_token: "auth-token".into(),
+            expires_at: 123,
+            user_id: "user-1".into(),
+            user_name: "Test User".into(),
+            refresh_token: Some("refresh-token".into()),
+        });
+
+        assert_eq!(token.token, "auth-token");
+        assert_eq!(token.expires_ms, 123);
+        assert_eq!(token.refresh_token.as_deref(), Some("refresh-token"));
     }
 }

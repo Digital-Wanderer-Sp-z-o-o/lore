@@ -95,6 +95,7 @@ message UserToken {
   int64 expires_at = 2; // Epoch
   string user_id = 3;   // URC user ID
   string user_name = 4; // Display name
+  optional string refresh_token = 5; // Rotating credential for silent reauthentication
 }
 
 message ResourcePermission {

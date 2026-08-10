@@ -365,7 +365,7 @@ pub trait Authentication: Send + Sync {
         correlation_id: &str,
     ) -> Result<AuthenticationToken, ProtocolError>;
 
-    /// Refreshes the authentication token using a one-time-use refresh token.
+    /// Refreshes the authentication token using a rotating refresh credential.
     async fn refresh_authentication(
         &self,
         auth_url: &str,

@@ -3673,6 +3673,16 @@ typedef struct lore_auth_clear_args_t {
   uint8_t _unused;
 } lore_auth_clear_args_t;
 
+// Arguments for silently refreshing a locally stored authentication session.
+typedef struct lore_auth_refresh_args_t {
+  // Auth service URL that owns the stored identity.
+  struct lore_string_t auth_endpoint;
+  // Stored user identity to refresh.
+  struct lore_string_t user_id;
+  // Remote hostname that must be covered by the refreshed token.
+  struct lore_string_t recipient_domain;
+} lore_auth_refresh_args_t;
+
 // Arguments for resolving user identities from locally stored JWT tokens.
 typedef struct lore_auth_local_user_info_args_t {
   // Auth service remote URL; empty resolves from the repository's remote environment
@@ -5402,6 +5412,16 @@ int32_t lore_auth_clear(const struct lore_global_args_t *globals,
 void lore_auth_clear_async(const struct lore_global_args_t *globals,
                            const struct lore_auth_clear_args_t *args,
                            struct lore_event_callback_config_t callback);
+
+// Ensure that a stored authentication session has a fresh access token.
+int32_t lore_auth_refresh(const struct lore_global_args_t *globals,
+                          const struct lore_auth_refresh_args_t *args,
+                          struct lore_event_callback_config_t callback);
+
+// Asynchronous version of `lore_auth_refresh`.
+void lore_auth_refresh_async(const struct lore_global_args_t *globals,
+                             const struct lore_auth_refresh_args_t *args,
+                             struct lore_event_callback_config_t callback);
 
 // Resolve user identities to display names from locally stored JWT tokens.
 //
