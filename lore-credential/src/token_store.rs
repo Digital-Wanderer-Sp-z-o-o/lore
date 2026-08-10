@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use std::str;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use atomic_write_file::AtomicWriteFile;
 use base64::prelude::BASE64_STANDARD;
 use base64::prelude::Engine as _;
 use lore_base::directories::project_directory;
@@ -48,6 +50,51 @@ pub enum TokenStoreError {
     TokenNotFound,
 }
 
+/// Storage boundary for the local token-encryption key.
+///
+/// `UserFile` is an intentional Perforce-ticket-style pilot mode. It relies on
+/// the operating-system user account and private filesystem permissions rather
+/// than an OS credential prompt. Do not silently replace it with `OsKeyring` in
+/// an application that selected it: doing so would regress the no-dialog login
+/// and restart contract. A production migration must be an explicit product
+/// decision with signed-client and UI coverage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecretStoreBackend {
+    OsKeyring,
+    UserFile,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("secret store is already configured as {active:?}, cannot switch to {requested:?}")]
+pub struct SecretStoreConfigurationError {
+    active: SecretStoreBackend,
+    requested: SecretStoreBackend,
+}
+
+static SECRET_STORE_BACKEND: OnceLock<SecretStoreBackend> = OnceLock::new();
+
+/// Selects the process-wide secret-store backend before the first token access.
+/// Repeating the same selection is harmless; switching after initialization is
+/// rejected so one process cannot read and write credentials through different
+/// security boundaries.
+pub fn configure_secret_store(
+    requested: SecretStoreBackend,
+) -> Result<(), SecretStoreConfigurationError> {
+    match SECRET_STORE_BACKEND.set(requested) {
+        Ok(()) => Ok(()),
+        Err(requested) => {
+            let active = *SECRET_STORE_BACKEND
+                .get()
+                .expect("secret store was initialized before set failed");
+            if active == requested {
+                Ok(())
+            } else {
+                Err(SecretStoreConfigurationError { active, requested })
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Encryption {
     key: Vec<u8>,
@@ -63,9 +110,9 @@ pub struct IdentityToken {
     /// The root domains this token can be given to without security concerns
     #[serde(default)]
     acceptable_root_domains: Vec<String>,
-    /// Base64 encoded (encrypted) one-time-use refresh token.
+    /// Base64 encoded (encrypted) rotating refresh credential.
     /// Stored separately from the auth token because it has a different
-    /// lifecycle: consumed on use and replaced atomically.
+    /// lifetime and is replaced after each successful refresh.
     #[serde(default)]
     refresh_token: Option<String>,
 }
@@ -129,6 +176,7 @@ fn base_path(create_dir: bool) -> Result<PathBuf, TokenStoreError> {
                 TokenStoreError::internal_with_context(e, "Failed to find base path")
             })?;
         }
+        harden_directory_permissions(path.as_path())?;
         return Ok(path);
     }
 
@@ -141,7 +189,62 @@ fn base_path(create_dir: bool) -> Result<PathBuf, TokenStoreError> {
             TokenStoreError::internal_with_context(e, "Failed to find base path")
         })?;
     }
+    harden_directory_permissions(path)?;
     Ok(path.to_path_buf())
+}
+
+#[cfg(unix)]
+fn harden_directory_permissions(path: &Path) -> Result<(), TokenStoreError> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if path.exists() {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|error| {
+            lore_warn!(
+                "Failed to restrict auth-store directory {}: {error}",
+                path.display()
+            );
+            TokenStoreError::internal_with_context(error, "Failed to restrict auth-store directory")
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_directory_permissions(_path: &Path) -> Result<(), TokenStoreError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn harden_file_permissions(path: &Path) -> Result<(), TokenStoreError> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if path.exists() {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| {
+            lore_warn!(
+                "Failed to restrict auth-store file {}: {error}",
+                path.display()
+            );
+            TokenStoreError::internal_with_context(error, "Failed to restrict auth-store file")
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_file_permissions(_path: &Path) -> Result<(), TokenStoreError> {
+    Ok(())
+}
+
+fn write_private_file_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let mut file = AtomicWriteFile::open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(contents)?;
+    file.commit()
 }
 
 fn token_map_path(create_dir: bool) -> Result<PathBuf, TokenStoreError> {
@@ -312,6 +415,7 @@ fn reload_token_map(guard: &FSLock, store: &mut Option<TokenMap>) {
 /// cross-process store lock for the duration of the read.
 fn load_token_map(_guard: &FSLock) -> Result<TokenMap, TokenStoreError> {
     let path = token_map_path(false)?;
+    harden_file_permissions(path.as_path())?;
     let mut options = store_open_options();
     options.read(true);
     let mut config_file = match options.open(path.as_path()) {
@@ -357,36 +461,28 @@ fn store_token_map(_guard: &FSLock, token_map: &TokenMap) -> Result<(), TokenSto
         TokenStoreError::internal_with_context(e, "Failed to store token map")
     })?;
 
-    let mut options = store_open_options();
-    options.create(true).write(true);
-    let mut config_file = match options.open(path.as_path()) {
-        Ok(file) => file,
-        Err(err) => {
-            lore_debug!("Failed to store token map file: {err}");
-            return Err(TokenStoreError::internal_with_context(
-                err,
-                "Failed to store token map",
-            ));
-        }
-    };
+    write_private_file_atomically(path.as_path(), config_string.as_bytes()).map_err(|e| {
+        lore_warn!("Failed to store token map: {e}");
+        TokenStoreError::internal_with_context(e, "Failed to store token map")
+    })?;
+    harden_file_permissions(path.as_path())
+}
 
-    // Truncate only after the write guard is held, so a concurrent reader
-    // can never observe a partially written file.
-    config_file
-        .set_len(0)
-        .and_then(|()| config_file.write_all(config_string.as_bytes()))
-        .map_err(|e| {
-            lore_warn!("Failed to store token map: {e}");
-            TokenStoreError::internal_with_context(e, "Failed to store token map")
-        })
+static OS_KEYRING_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
+
+fn configured_secret_store() -> SecretStoreBackend {
+    *SECRET_STORE_BACKEND.get_or_init(|| {
+        if std::env::var("LORE_AUTH_STORE").as_deref() == Ok("fallback") {
+            SecretStoreBackend::UserFile
+        } else {
+            SecretStoreBackend::OsKeyring
+        }
+    })
 }
 
 fn use_secure_store() -> bool {
-    if let Ok(store) = std::env::var("LORE_AUTH_STORE") {
-        store != "fallback"
-    } else {
-        true
-    }
+    configured_secret_store() == SecretStoreBackend::OsKeyring
+        && !OS_KEYRING_UNAVAILABLE.load(Ordering::Acquire)
 }
 
 fn store_fallback_path(name: &str, create_dir: bool) -> Result<PathBuf, TokenStoreError> {
@@ -1018,6 +1114,7 @@ async fn get_secret_from_store(target: &str) -> Result<Vec<u8>, TokenStoreError>
     if !path.exists() {
         return Ok(Vec::default());
     }
+    harden_file_permissions(path.as_path())?;
     let _guard = lock_store_file(path.as_path()).await?;
     let mut options = store_open_options();
     options.read(true);
@@ -1034,10 +1131,7 @@ async fn get_secret_from_store(target: &str) -> Result<Vec<u8>, TokenStoreError>
             ));
         }
     };
-    lore_trace!(
-        "Loaded secret from insecure fallback path {}",
-        path.display()
-    );
+    lore_trace!("Loaded secret from private user file {}", path.display());
 
     let mut secret = Vec::default();
     // Read via the guarded handle; `fs::read` would re-open the file
@@ -1066,9 +1160,7 @@ async fn set_secret_in_store(target: &str, secret: Vec<u8>) -> Result<Vec<u8>, T
             return Ok(secret);
         }
         // If we fallback to disk storage, ensure further get calls use this
-        unsafe {
-            std::env::set_var("LORE_AUTH_STORE", "fallback");
-        }
+        OS_KEYRING_UNAVAILABLE.store(true, Ordering::Release);
     }
 
     let path = store_fallback_path(target, true).map_err(|e| {
@@ -1076,20 +1168,12 @@ async fn set_secret_in_store(target: &str, secret: Vec<u8>) -> Result<Vec<u8>, T
         TokenStoreError::internal_with_context(e, "Failed to make fallback path")
     })?;
     let _guard = lock_store_file(path.as_path()).await?;
-    let mut options = store_open_options();
-    options.create(true).write(true);
-    let mut secret_file = options.open(path.as_path()).map_err(|e| {
-        lore_warn!("Failed to write secret to fallback path: {e}");
-        TokenStoreError::internal_with_context(e, "Failed to write secret to fallback path")
+    write_private_file_atomically(path.as_path(), &secret).map_err(|e| {
+        lore_warn!("Failed to write secret to private user file: {e}");
+        TokenStoreError::internal_with_context(e, "Failed to write secret to private user file")
     })?;
-    secret_file
-        .set_len(0)
-        .and_then(|()| secret_file.write_all(&secret))
-        .map_err(|e| {
-            lore_warn!("Failed to write secret to fallback path: {e}");
-            TokenStoreError::internal_with_context(e, "Failed to write secret to fallback path")
-        })?;
-    lore_trace!("Stored secret in insecure fallback path {}", path.display());
+    harden_file_permissions(path.as_path())?;
+    lore_trace!("Stored secret in private user file {}", path.display());
     Ok(secret)
 }
 
@@ -1146,6 +1230,43 @@ impl NonceSequence for CounterNonceSequence {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_file_write_replaces_contents_atomically() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("credential");
+        fs::write(&path, b"old").unwrap();
+
+        write_private_file_atomically(&path, b"new credential").unwrap();
+
+        assert_eq!(fs::read(path).unwrap(), b"new credential");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_store_permissions_are_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = directory.path().join("auth-store");
+        fs::create_dir(&store).unwrap();
+        fs::set_permissions(&store, fs::Permissions::from_mode(0o755)).unwrap();
+        harden_directory_permissions(&store).unwrap();
+
+        let credential = store.join("credential");
+        fs::write(&credential, b"secret").unwrap();
+        fs::set_permissions(&credential, fs::Permissions::from_mode(0o644)).unwrap();
+        write_private_file_atomically(&credential, b"rotated secret").unwrap();
+
+        assert_eq!(
+            fs::metadata(store).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(credential).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 
     #[test]
     fn refresh_token_serde_default_none() {
