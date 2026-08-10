@@ -281,6 +281,28 @@ pub extern "C" fn lore_auth_clear_async(
     run_asynchronously(globals, args, callback, crate::auth::clear);
 }
 
+pub type LoreAuthRefreshArgs = crate::auth::LoreAuthRefreshArgs;
+
+/// Ensure that a stored authentication session has a fresh access token.
+#[unsafe(no_mangle)]
+pub extern "C" fn lore_auth_refresh(
+    globals: &LoreGlobalArgs,
+    args: &LoreAuthRefreshArgs,
+    callback: LoreEventCallbackConfig,
+) -> i32 {
+    run_synchronously(globals, args, callback, crate::auth::refresh)
+}
+
+/// Asynchronous version of `lore_auth_refresh`.
+#[unsafe(no_mangle)]
+pub extern "C" fn lore_auth_refresh_async(
+    globals: &LoreGlobalArgs,
+    args: &LoreAuthRefreshArgs,
+    callback: LoreEventCallbackConfig,
+) {
+    run_asynchronously(globals, args, callback, crate::auth::refresh);
+}
+
 pub type LoreAuthLocalUserInfoArgs = crate::auth::LoreAuthLocalUserInfoArgs;
 
 /// Resolve user identities to display names from locally stored JWT tokens.

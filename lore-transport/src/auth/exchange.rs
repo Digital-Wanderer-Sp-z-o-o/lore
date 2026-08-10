@@ -48,9 +48,16 @@ type RecipientDomain = String;
 type AuthzCache = Mutex<HashMap<(AuthUrl, Identity, CacheResourceId, RecipientDomain), String>>;
 
 static AUTHZ_CACHE: std::sync::OnceLock<AuthzCache> = std::sync::OnceLock::new();
+static AUTHN_REFRESH_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+
+const AUTHN_REFRESH_WINDOW_MS: u64 = 60_000;
 
 fn cache() -> &'static AuthzCache {
     AUTHZ_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn authn_refresh_lock() -> &'static Mutex<()> {
+    AUTHN_REFRESH_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 pub fn is_expired(expires: u64) -> bool {
@@ -60,6 +67,121 @@ pub fn is_expired(expires: u64) -> bool {
         .unwrap_or_default()
         .as_millis();
     current_time >= expires
+}
+
+fn expires_within(expires: u64, window_ms: u64) -> bool {
+    let current_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    expires_within_at(expires, window_ms, current_time)
+}
+
+fn expires_within_at(expires: u64, window_ms: u64, current_time_ms: u128) -> bool {
+    current_time_ms.saturating_add(u128::from(window_ms)) >= u128::from(expires)
+}
+
+/// Returns a valid authentication token, refreshing the stored token when it
+/// is expired or close to expiry. Refresh is serialized so concurrent remote
+/// operations cannot consume the same rotating credential more than once.
+pub async fn ensure_fresh_authentication(
+    auth_url: &str,
+    identity: &str,
+    recipient_domain: &str,
+) -> Result<String, ExchangeError> {
+    if let Some(token) = fresh_stored_authentication(auth_url, identity, recipient_domain).await {
+        return Ok(token);
+    }
+
+    let _refresh_guard = authn_refresh_lock().lock().await;
+    if let Some(token) = fresh_stored_authentication(auth_url, identity, recipient_domain).await {
+        return Ok(token);
+    }
+
+    let refresh_token = token_store::load_refresh_token(auth_url, identity)
+        .await
+        .map_err(|_| ExchangeError::from(NotAuthenticated))?;
+    let auth_impl = authentication::find(auth_url)
+        .forward::<ExchangeError>("finding authentication handler")?;
+    let refreshed = auth_impl
+        .refresh_authentication(auth_url, &refresh_token, "")
+        .await
+        .forward::<ExchangeError>("refreshing authentication")?;
+
+    validate_and_store_refreshed_authentication(auth_url, identity, recipient_domain, refreshed)
+        .await
+}
+
+async fn fresh_stored_authentication(
+    auth_url: &str,
+    identity: &str,
+    recipient_domain: &str,
+) -> Option<String> {
+    let stored_token = token_store::load_user_token(
+        auth_url,
+        identity,
+        tokens_only_for_recipient_domain(recipient_domain.to_string()),
+    )
+    .await
+    .ok()?;
+    if let Some(info) = lore_credential::user_info_from_token(stored_token.clone())
+        && !expires_within(info.expires, AUTHN_REFRESH_WINDOW_MS)
+    {
+        return Some(stored_token);
+    }
+    None
+}
+
+async fn validate_and_store_refreshed_authentication(
+    auth_url: &str,
+    identity: &str,
+    recipient_domain: &str,
+    refreshed: crate::types::AuthenticationToken,
+) -> Result<String, ExchangeError> {
+    if refreshed.token.is_empty() || refreshed.user_id != identity {
+        return Err(ExchangeError::internal(
+            "Authentication refresh returned an invalid identity token",
+        ));
+    }
+    let decoded = insecure_decode_token(&refreshed.token)
+        .internal("Could not decode refreshed authentication token")
+        .map_err(ExchangeError::from)?;
+    if decoded.claims.user_id != identity {
+        return Err(ExchangeError::internal(
+            "Refreshed authentication token subject does not match the selected identity",
+        ));
+    }
+    verify_jwt_usage_for_remote(&decoded.claims, recipient_domain).map_err(|error| {
+        ExchangeError::internal_with_context(
+            error,
+            "The refreshed token is not valid for the requested remote",
+        )
+    })?;
+    let next_refresh_token = refreshed.refresh_token.as_deref().ok_or_else(|| {
+        ExchangeError::internal("Authentication refresh did not rotate the refresh credential")
+    })?;
+
+    token_store::store_user_token(
+        auth_url,
+        identity,
+        &refreshed.token,
+        decoded.claims.acceptable_root_domains(),
+    )
+    .await
+    .map_err(|error| {
+        ExchangeError::internal_with_context(
+            error,
+            "Could not store refreshed authentication token",
+        )
+    })?;
+    token_store::store_refresh_token(auth_url, identity, next_refresh_token)
+        .await
+        .map_err(|error| {
+            ExchangeError::internal_with_context(error, "Could not rotate refresh credential")
+        })?;
+
+    lore_debug!("Refreshed authentication for identity {identity}");
+    Ok(refreshed.token)
 }
 
 /// Exchanges an authentication token for a repository-scoped authorization
@@ -431,24 +553,14 @@ async fn auth_exchange_for_identity(
     identity: &str,
     repository: RepositoryId,
 ) -> (String, String, String) {
-    let Ok(authentication_token) = token_store::load_user_token(
-        auth_url,
-        identity,
-        tokens_only_for_recipient_domain(remote_domain.to_string()),
-    )
-    .await
-    else {
-        lore_debug!("Auth exchange failed, no user authentication token found for {identity}");
-        return (String::new(), String::new(), String::new());
-    };
-
-    // Reject expired authn tokens
-    if let Some(info) = lore_credential::user_info_from_token(authentication_token.clone())
-        && is_expired(info.expires)
-    {
-        lore_debug!("Skipping identity {identity}, authn token is expired");
-        return (String::new(), String::new(), String::new());
-    }
+    let authentication_token =
+        match ensure_fresh_authentication(auth_url, identity, remote_domain).await {
+            Ok(token) => token,
+            Err(error) => {
+                lore_debug!("Auth exchange failed for identity {identity}: {error}");
+                return (String::new(), String::new(), String::new());
+            }
+        };
 
     // This will return the cached authz token if it is still valid,
     // or perform an authz exchange if needed
@@ -558,23 +670,14 @@ async fn auth_exchange_custom_resource_for_identity(
     identity: &str,
     resource_id: &str,
 ) -> (String, String, String) {
-    let Ok(authentication_token) = token_store::load_user_token(
-        auth_url,
-        identity,
-        tokens_only_for_recipient_domain(remote_domain.to_string()),
-    )
-    .await
-    else {
-        lore_debug!("Auth exchange failed, no user authentication token found for {identity}");
-        return (String::new(), String::new(), String::new());
-    };
-
-    if let Some(info) = lore_credential::user_info_from_token(authentication_token.clone())
-        && is_expired(info.expires)
-    {
-        lore_debug!("Skipping identity {identity}, authn token is expired");
-        return (String::new(), String::new(), String::new());
-    }
+    let authentication_token =
+        match ensure_fresh_authentication(auth_url, identity, remote_domain).await {
+            Ok(token) => token,
+            Err(error) => {
+                lore_debug!("Auth exchange failed for identity {identity}: {error}");
+                return (String::new(), String::new(), String::new());
+            }
+        };
 
     let authorization_token =
         exchange_custom_resource(auth_url, identity, resource_id, remote_domain.to_string())
@@ -616,4 +719,16 @@ async fn auth_exchange_custom_resource_for_identity(
         authorization_token,
         identity.to_string(),
     )
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::expires_within_at;
+
+    #[test]
+    fn refreshes_at_the_safety_window_boundary() {
+        assert!(expires_within_at(160_000, 60_000, 100_000));
+        assert!(expires_within_at(159_999, 60_000, 100_000));
+        assert!(!expires_within_at(160_001, 60_000, 100_000));
+    }
 }

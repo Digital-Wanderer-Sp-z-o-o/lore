@@ -116,6 +116,9 @@ pub struct UserToken {
     /// Display name
     #[prost(string, tag = "4")]
     pub user_name: ::prost::alloc::string::String,
+    /// Rotating credential for silent reauthentication
+    #[prost(string, optional, tag = "5")]
+    pub refresh_token: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ResourcePermission {
