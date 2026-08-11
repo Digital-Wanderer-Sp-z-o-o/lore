@@ -31,11 +31,13 @@ jobs:
           cache-dependency-path: .pre-commit-config.yaml
 
       # cargo-clippy, cargo-fmt and cargo-deny run as Rust pre-commit hooks.
-      # Lore formats with nightly; clippy and cargo-deny run on stable.
+      # Keep the exact toolchains deterministic. Floating stable/nightly aliases
+      # can introduce a new deny-by-default lint or rewrite the whole workspace
+      # even when the PR itself did not change Rust source.
       - name: Install Rust toolchains
         run: |
-          rustup toolchain install nightly --profile minimal -c rustfmt
-          rustup component add clippy rustfmt
+          rustup toolchain install 1.96.0 --profile minimal -c clippy,rustfmt
+          rustup toolchain install nightly-2026-03-18 --profile minimal -c rustfmt
 
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
