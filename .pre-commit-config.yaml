@@ -13,7 +13,7 @@ repos:
       - id: cargo-fmt
         name: cargo format
         language: rust
-        entry: cargo +nightly fmt --all --check
+        entry: cargo +nightly-2026-03-18 fmt --all --check
         pass_filenames: false
         always_run: true
 
@@ -60,7 +60,7 @@ repos:
     rev: v2.2.4
     hooks:
       - id: codespell
-        args: [ "-L", "ue,crate,numer,ser,ratatui,ect,noes,keep-alives", "-S", "Cargo.*,vendor/*" ]
+        args: [ "-L", "ue,crate,numer,ser,ratatui,ect,noes,keep-alives,hastable", "-S", "Cargo.*,package-lock.json,vendor/*" ]
         exclude: ^docs/developing/doc-standards/tools/vale/styles/
 
   - repo: https://github.com/rhysd/actionlint
