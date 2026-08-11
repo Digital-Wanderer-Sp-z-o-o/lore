@@ -206,6 +206,32 @@ mod tests {
     fn hetzner_profile_uses_valid_native_cloudflare_config() {
         let profile: toml::Value =
             toml::from_str(include_str!("../../../contrib/hetzner/config.toml")).unwrap();
+        assert_valid_cloudflare_profile(&profile);
+    }
+
+    #[test]
+    fn production_profile_uses_archigma_auth_and_promoted_cloudflare_data() {
+        let profile: toml::Value = toml::from_str(include_str!(
+            "../../../contrib/hetzner/config.production.toml"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            profile["server"]["auth"]["jwt_issuer"].as_str(),
+            Some("https://archigma.com")
+        );
+        assert_eq!(
+            profile["server"]["auth"]["jwk"]["endpoint"].as_str(),
+            Some("https://archigma.com/api/v1/lore/auth/jwks.json")
+        );
+        assert_eq!(
+            profile["environment"]["endpoint"]["auth_url"].as_str(),
+            Some("ucs-auth://archigma.com")
+        );
+        assert_valid_cloudflare_profile(&profile);
+    }
+
+    fn assert_valid_cloudflare_profile(profile: &toml::Value) {
         assert_eq!(
             profile["immutable_store"]["composite"]["durable"]["mode"].as_str(),
             Some(PLUGIN_NAME)
