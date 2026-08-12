@@ -18,6 +18,7 @@ services:
       RUST_LOG: info
     volumes:
       - ./config.toml:/etc/lore/config/hetzner.toml:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
       - ${LORE_CANARY_CACHE_ROOT:-/var/lib/lore/cache-canary}:/data/cache
     stop_grace_period: 30s
     logging:

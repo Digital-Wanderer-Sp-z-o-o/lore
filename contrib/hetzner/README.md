@@ -36,24 +36,46 @@ RAID1 layout used by this profile, use the equivalent of
 partitioning. After reboot, verify both arrays report `[UU]` in `/proc/mdstat` before accepting the
 host.
 
-## Private access and authentication
+## Public TLS access and authentication
 
 The checked-in profile requires repository-scoped JWTs issued from existing Rendermoon accounts.
-Put client traffic on WireGuard and allow these ports only from the team VPN CIDR:
+Clients connect directly to the public hostname with TLS 1.3:
 
-| Port  | Protocol | Purpose                                        |
-| ----- | -------- | ---------------------------------------------- |
-| 41337 | UDP      | Lore QUIC                                      |
-| 41337 | TCP      | Lore gRPC                                      |
-| 22    | TCP      | administration, preferably only over WireGuard |
+| Port | Protocol | Purpose                                      |
+| ---- | -------- | -------------------------------------------- |
+| 443  | UDP      | Lore QUIC over `lores://`                    |
+| 443  | TCP      | Lore gRPC with TLS                           |
+| 80   | TCP      | ACME HTTP-01 challenge during cert renewal   |
+| 22   | TCP      | key-only administration                      |
 
-The HTTP health endpoint binds to loopback and is not public. Use `lore://` only inside this private
-test network; that URL scheme intentionally skips certificate verification. JWT protects the Lore
-application requests but does not encrypt this transport. Before non-staging access, configure a
-trusted `lores://` certificate as well.
+The HTTP health endpoint stays on loopback and is not public. Clients must use
+`lores://lore.rendermoon.com:443`; plain `lore://` intentionally skips server-certificate validation
+and is not supported by this deployment. JWT remains the application authorization boundary, while
+the publicly trusted certificate authenticates and encrypts the transport.
 
-The checked-in staging profile binds QUIC and gRPC specifically to the server WireGuard address
-`10.80.0.10`. Keep that address in sync with `wg0`; do not broaden the bind to `0.0.0.0`.
+The host firewall exposes only the four ports above. SSH must keep password authentication disabled,
+root's password locked, and the reviewed ED25519 key as the sole administrative credential. Do not
+publish Docker, the loopback health endpoint, or internal replication ports.
+
+Before starting LORE, create an unproxied DNS `A` record for `lore.rendermoon.com`, pointing to the
+server's public IPv4 address, and issue a certificate whose live files are:
+
+```text
+/etc/letsencrypt/live/lore.rendermoon.com/fullchain.pem
+/etc/letsencrypt/live/lore.rendermoon.com/privkey.pem
+```
+
+The Compose service mounts `/etc/letsencrypt` read-only. Install a Certbot deploy hook that restarts
+only `archigma-lore-staging`, waits for `/health_check`, and fails visibly if the renewed certificate
+is not loaded. A single-host restart causes a short pilot interruption; remove that interruption with
+the planned second server before broader rollout.
+
+```bash
+sudo install -m 0755 \
+  contrib/hetzner/reload-after-cert-renewal.sh \
+  /etc/letsencrypt/renewal-hooks/deploy/reload-lore
+sudo certbot renew --dry-run
+```
 
 ## Deploy
 
@@ -98,6 +120,11 @@ curl --fail http://127.0.0.1:41339/health_check
 docker compose logs --tail 100 lore-server
 ```
 
+Before promotion, inspect the certificate from an external client, run an authenticated
+create/clone/push/verify canary through `lores://lore.rendermoon.com:443`, and prove that connecting by
+the bare IP fails hostname validation. Keep the prior container image and configuration available
+until these checks pass.
+
 The Git-derived image tag and OCI revision label make the running server
 verifiable and leave an explicit rollback target. After the first bootstrap,
 all updates must follow the separate
@@ -134,7 +161,7 @@ become the result. For example, four machines can each supply 20 clients for the
 
 ```powershell
 .\contrib\hetzner\scale-clone.ps1 `
-  -RemoteUrl lore://10.80.0.10:41337/blender-scale `
+  -RemoteUrl lores://lore.rendermoon.com:443/blender-scale `
   -ViewFile D:\lore-tests\blender-scale.view `
   -Concurrency 1,10,20
 ```
