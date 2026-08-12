@@ -21,12 +21,31 @@ use crate::types::*;
 ///
 /// `ucs-auth://auth.example.com` -> `https://auth.example.com`
 /// `https://auth.example.com` -> `https://auth.example.com` (unchanged)
-fn grpc_endpoint(auth_url: &str) -> String {
+///
+/// Debug builds additionally allow explicit loopback HTTP endpoints so the
+/// auth contract can be exercised locally without terminating TLS. Release
+/// builds never send authentication material over cleartext HTTP.
+fn grpc_endpoint(auth_url: &str) -> Result<String, ProtocolError> {
     match auth_url.split_once("://") {
-        Some(("https", _)) => auth_url.to_string(),
-        Some((_, rest)) => format!("https://{rest}"),
-        None => format!("https://{auth_url}"),
+        Some(("https", _)) => Ok(auth_url.to_string()),
+        #[cfg(debug_assertions)]
+        Some(("http", rest)) if is_loopback_authority(rest) => Ok(auth_url.to_string()),
+        Some(("http", _)) => Err(ProtocolError::internal(
+            "cleartext HTTP authentication is restricted to loopback debug builds",
+        )),
+        Some((_, rest)) => Ok(format!("https://{rest}")),
+        None => Ok(format!("https://{auth_url}")),
     }
+}
+
+#[cfg(debug_assertions)]
+fn is_loopback_authority(authority_and_path: &str) -> bool {
+    let authority = authority_and_path.split('/').next().unwrap_or_default();
+    let host = authority
+        .strip_prefix('[')
+        .and_then(|value| value.split_once(']').map(|(host, _)| host))
+        .unwrap_or_else(|| authority.split(':').next().unwrap_or_default());
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
 /// Formats a `RepositoryId` as a UCS Auth resource identifier.
@@ -44,7 +63,7 @@ async fn connect_client(
     >,
     ProtocolError,
 > {
-    let endpoint = grpc_endpoint(auth_url);
+    let endpoint = grpc_endpoint(auth_url)?;
     let channel = tonic::transport::Endpoint::new(endpoint)
         .map_err(|e| ProtocolError::internal(format!("invalid auth endpoint: {e}")))?
         .connect()
@@ -295,7 +314,7 @@ mod tests {
     #[test]
     fn grpc_endpoint_ucs_auth() {
         assert_eq!(
-            grpc_endpoint("ucs-auth://auth.example.com"),
+            grpc_endpoint("ucs-auth://auth.example.com").unwrap(),
             "https://auth.example.com"
         );
     }
@@ -303,7 +322,7 @@ mod tests {
     #[test]
     fn grpc_endpoint_https() {
         assert_eq!(
-            grpc_endpoint("https://auth.example.com"),
+            grpc_endpoint("https://auth.example.com").unwrap(),
             "https://auth.example.com"
         );
     }
@@ -311,7 +330,7 @@ mod tests {
     #[test]
     fn grpc_endpoint_no_scheme() {
         assert_eq!(
-            grpc_endpoint("auth.example.com"),
+            grpc_endpoint("auth.example.com").unwrap(),
             "https://auth.example.com"
         );
     }
@@ -319,9 +338,22 @@ mod tests {
     #[test]
     fn grpc_endpoint_custom_scheme() {
         assert_eq!(
-            grpc_endpoint("custom://auth.example.com:8443/path"),
+            grpc_endpoint("custom://auth.example.com:8443/path").unwrap(),
             "https://auth.example.com:8443/path"
         );
+    }
+
+    #[test]
+    fn grpc_endpoint_allows_only_loopback_http_in_debug_builds() {
+        assert_eq!(
+            grpc_endpoint("http://127.0.0.1:3010").unwrap(),
+            "http://127.0.0.1:3010"
+        );
+        assert_eq!(
+            grpc_endpoint("http://localhost:3010/path").unwrap(),
+            "http://localhost:3010/path"
+        );
+        assert!(grpc_endpoint("http://auth.example.com").is_err());
     }
 
     #[test]

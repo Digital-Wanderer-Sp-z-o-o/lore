@@ -68,10 +68,37 @@ pub struct EndpointConfig {
     pub sni_override: Option<String>,
 }
 
-const IDLE_TIMEOUT_MS: u32 = 30000;
-const KEEP_ALIVE_MS: u64 = 500;
 const HANDSHAKE_TIMEOUT_SECS: u64 = 5;
 pub const DEFAULT_EXPECTED_RTT_MS: u64 = 100;
+/// Maximum wall-clock time for one command after it acquires its client permit.
+/// Keep-alive proves that the QUIC path is alive, but it cannot prove that an
+/// application response still exists. A bounded command timeout forces a clean
+/// reconnect when a response is lost while the transport itself stays healthy.
+pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+pub const DEFAULT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_millis(500);
+
+fn validate_liveness(
+    idle_timeout: Duration,
+    keep_alive_interval: Duration,
+) -> Result<(), ProtocolError> {
+    if idle_timeout.is_zero() {
+        return Err(ProtocolError::internal(
+            "QUIC idle timeout must be greater than zero",
+        ));
+    }
+    if keep_alive_interval.is_zero() {
+        return Err(ProtocolError::internal(
+            "QUIC keep-alive interval must be greater than zero",
+        ));
+    }
+    if keep_alive_interval >= idle_timeout {
+        return Err(ProtocolError::internal(
+            "QUIC keep-alive interval must be shorter than the idle timeout",
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug)]
 pub struct ClientCerts {
@@ -206,6 +233,10 @@ pub struct TransportConfig {
     pub congestion_algorithm: CongestionAlgorithm,
     /// Warm-start hint for Congestion Algorithms: seed the initial congestion window
     pub initial_cwnd: Option<u64>,
+    /// Maximum time without acknowledged QUIC traffic before considering the peer lost.
+    pub idle_timeout: Duration,
+    /// Interval for ack-eliciting keep-alive frames while a connection is otherwise idle.
+    pub keep_alive_interval: Duration,
 }
 
 /// When working within a QUIC connection, these are the opportunities
@@ -443,12 +474,16 @@ pub enum ReconnectError {
 /// cost. Using a const generic resolves the priority value at compile time through
 /// monomorphization, adding zero bytes to the future. This is validated by the
 /// `test_futures_size` test which enforces a strict upper bound on the get future size.
-pub async fn send_with_reconnect<ServiceClientType, const LEN: usize, const HIGH_PRIORITY: bool>(
+pub async fn send_with_reconnect_epoch<
+    ServiceClientType,
+    const LEN: usize,
+    const HIGH_PRIORITY: bool,
+>(
     service_client: &ServiceClientType,
     request_type: ServiceClientType::RequestType,
     session_id: u32,
     chunks: impl Fn() -> [Bytes; LEN],
-) -> Result<Bytes, ServiceClientType::ErrorType>
+) -> Result<(Bytes, u32), ServiceClientType::ErrorType>
 where
     ServiceClientType: ServiceClient,
 {
@@ -460,19 +495,30 @@ where
         };
 
         let epoch = service_client.quic().epoch.load(Ordering::Relaxed);
-        match send_command::<HIGH_PRIORITY>(
-            service_client.quic().clone(),
-            request_type.into(),
-            session_id,
-            service_client.v4_protocol(),
-            &mut chunks(),
+        let opcode = request_type.into();
+        match tokio::time::timeout(
+            DEFAULT_COMMAND_TIMEOUT,
+            send_command::<HIGH_PRIORITY>(
+                service_client.quic().clone(),
+                opcode,
+                session_id,
+                service_client.v4_protocol(),
+                &mut chunks(),
+            ),
         )
         .await
         {
-            Ok(payload) => return Ok(payload),
+            Ok(Ok(payload)) => return Ok((payload, epoch)),
+            Err(_elapsed) => {
+                lore_warn!(
+                    "QUIC command {opcode} timed out after {:.2}s; reconnecting",
+                    DEFAULT_COMMAND_TIMEOUT.as_secs_f64()
+                );
+                drop(permit);
+            }
             // error handling for things that cannot be recovered by reconnecting
             // and should be bubbled up to the caller immediately
-            Err(err)
+            Ok(Err(err))
                 if matches!(
                     err,
                     QuicClientError::SlowDown
@@ -485,19 +531,19 @@ where
                     .map_send_error(request_type, SendWithReconnectError::ClientError(err)));
             }
             // error handling for things that should trigger a reconnect
-            Err(QuicClientError::Terminated | QuicClientError::StreamOpen) => {
+            Ok(Err(QuicClientError::Terminated | QuicClientError::StreamOpen)) => {
                 // Fall through to reconnect
                 drop(permit);
             }
             // a non retryable connection error - so just mark as disconnected immediately
-            Err(QuicClientError::CrytpoError) => {
+            Ok(Err(QuicClientError::CrytpoError)) => {
                 return Err(service_client
                     .map_send_error(request_type, SendWithReconnectError::Disconnected));
             }
             // error handling for things that have indicated an error, but the error could
             // be related to something else that triggered a reconnect. We should see if we are
             // reconnecting, and if we are then retry the message again otherwise bubble it up
-            Err(err) => {
+            Ok(Err(err)) => {
                 drop(permit);
 
                 let epoch_current = service_client.quic().epoch.load(Ordering::Relaxed);
@@ -531,6 +577,25 @@ where
                 .map_send_error(request_type, SendWithReconnectError::ReconnectFailed));
         }
     }
+}
+
+pub async fn send_with_reconnect<ServiceClientType, const LEN: usize, const HIGH_PRIORITY: bool>(
+    service_client: &ServiceClientType,
+    request_type: ServiceClientType::RequestType,
+    session_id: u32,
+    chunks: impl Fn() -> [Bytes; LEN],
+) -> Result<Bytes, ServiceClientType::ErrorType>
+where
+    ServiceClientType: ServiceClient,
+{
+    send_with_reconnect_epoch::<ServiceClientType, LEN, HIGH_PRIORITY>(
+        service_client,
+        request_type,
+        session_id,
+        chunks,
+    )
+    .await
+    .map(|(payload, _epoch)| payload)
 }
 
 fn strip_ipv6_brackets(host: &str) -> &str {
@@ -706,9 +771,13 @@ pub async fn connect(
         .max_concurrent_uni_streams(0_u8.into())
         .max_concurrent_bidi_streams(STREAM_COUNT.into());
 
+    validate_liveness(transport.idle_timeout, transport.keep_alive_interval)?;
+    let idle_timeout = IdleTimeout::try_from(transport.idle_timeout).map_err(|_range_error| {
+        ProtocolError::internal("QUIC idle timeout exceeds protocol maximum")
+    })?;
     transport_config
-        .max_idle_timeout(Some(IdleTimeout::from(VarInt::from_u32(IDLE_TIMEOUT_MS))))
-        .keep_alive_interval(Some(Duration::from_millis(KEEP_ALIVE_MS)));
+        .max_idle_timeout(Some(idle_timeout))
+        .keep_alive_interval(Some(transport.keep_alive_interval));
 
     let recv_window = (transport.max_bytes_bandwidth_per_second / 1000) * transport.expected_rtt_ms;
     let send_window = recv_window;
@@ -1081,6 +1150,23 @@ where
     )
 }
 
+pub fn send_normal_with_reconnect_epoch<'a, ServiceClientType, const LEN: usize>(
+    service_client: &'a ServiceClientType,
+    request_type: ServiceClientType::RequestType,
+    session_id: u32,
+    chunks: impl Fn() -> [Bytes; LEN] + Send + 'a,
+) -> impl Future<Output = Result<(Bytes, u32), ServiceClientType::ErrorType>> + Send + 'a
+where
+    ServiceClientType: ServiceClient,
+{
+    send_with_reconnect_epoch::<ServiceClientType, LEN, false>(
+        service_client,
+        request_type,
+        session_id,
+        chunks,
+    )
+}
+
 pub fn send_high_priority_with_reconnect<'a, ServiceClientType, const LEN: usize>(
     service_client: &'a ServiceClientType,
     request_type: ServiceClientType::RequestType,
@@ -1176,4 +1262,24 @@ pub async fn send_command<const HIGH_PRIORITY: bool>(
         lore_warn!("{}: {err}", QuicClientError::Read);
         QuicClientError::Read
     })?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_liveness_profile_is_valid_for_saturated_wan_transfers() {
+        assert!(validate_liveness(DEFAULT_IDLE_TIMEOUT, DEFAULT_KEEP_ALIVE_INTERVAL).is_ok());
+        assert_eq!(DEFAULT_IDLE_TIMEOUT, Duration::from_secs(300));
+        assert_eq!(DEFAULT_COMMAND_TIMEOUT, Duration::from_secs(120));
+        assert!(DEFAULT_COMMAND_TIMEOUT < DEFAULT_IDLE_TIMEOUT);
+    }
+
+    #[test]
+    fn liveness_profile_rejects_missing_or_late_keep_alive() {
+        assert!(validate_liveness(Duration::ZERO, Duration::from_millis(500)).is_err());
+        assert!(validate_liveness(Duration::from_secs(1), Duration::ZERO).is_err());
+        assert!(validate_liveness(Duration::from_secs(1), Duration::from_secs(1)).is_err());
+    }
 }

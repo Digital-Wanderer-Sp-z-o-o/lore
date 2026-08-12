@@ -273,6 +273,12 @@ pub struct LoreLinkEntryEventData {
     pub revision: Hash,
     /// Link flags.
     pub flags: u32,
+    /// Whether the linked repository state is available in the local store.
+    ///
+    /// A zero value means the caller can inspect the committed mount metadata,
+    /// but the linked content is unavailable or restricted and must not be
+    /// traversed.
+    pub content_available: u8,
 }
 
 bitflags! {
@@ -993,4 +999,30 @@ pub fn link_mount_prefix(full_path: &str, link_relative: &str) -> String {
         .unwrap_or(full_path)
         .trim_end_matches('/');
     trimmed.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn link_entry_serialization_exposes_content_availability() {
+        let entry = LoreLinkEntryEventData {
+            link: RepositoryId::default(),
+            link_node: 1,
+            link_path: "Restricted".into(),
+            source_node: 0,
+            source_path: "".into(),
+            branch: BranchId::default(),
+            branch_name: "".into(),
+            revision: Hash::default(),
+            flags: LinkFlags::NoFlags.bits(),
+            content_available: false.into(),
+        };
+
+        let serialized = serde_json::to_value(entry).expect("link entry should serialize");
+
+        assert_eq!(serialized["contentAvailable"], 0);
+        assert_eq!(serialized["linkPath"], "Restricted");
+    }
 }

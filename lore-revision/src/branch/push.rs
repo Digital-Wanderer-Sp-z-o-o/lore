@@ -35,10 +35,12 @@ use crate::lore::Hash;
 use crate::lore::RepositoryId;
 use crate::lore::execution_context;
 use crate::lore_debug;
+use crate::lore_warn;
 use crate::repository;
 use crate::repository::RepositoryContext;
 use crate::repository::RepositoryWriteToken;
 use crate::state;
+use crate::state::LinkReference;
 use crate::state::State;
 use crate::store;
 use crate::util::serde::u8_as_bool;
@@ -290,6 +292,23 @@ pub async fn push(
     token: &RepositoryWriteToken,
     options: PushOptions,
 ) -> Result<(), PushError> {
+    push_with_token(repository, Some(token), options).await
+}
+
+/// Preview the exact recursive units a push would consider without minting a
+/// write token or mutating local or remote repository state.
+pub async fn preview(
+    repository: Arc<RepositoryContext>,
+    options: PushOptions,
+) -> Result<(), PushError> {
+    push_with_token(repository, None, options).await
+}
+
+async fn push_with_token(
+    repository: Arc<RepositoryContext>,
+    token: Option<&RepositoryWriteToken>,
+    options: PushOptions,
+) -> Result<(), PushError> {
     let branch;
     let local_latest;
     if let Some(branch_identifier) = &options.branch {
@@ -377,7 +396,7 @@ pub async fn push(
 
 async fn collect_fragments_and_push(
     repository: Arc<RepositoryContext>,
-    token: &RepositoryWriteToken,
+    token: Option<&RepositoryWriteToken>,
     options: PushOptions,
     state: Arc<State>,
     branch: BranchId,
@@ -568,7 +587,7 @@ async fn collect_fragments_and_push(
     })
     .send();
 
-    let dry_run = execution_context().globals().dry_run();
+    let dry_run = token.is_none() || execution_context().globals().dry_run();
 
     // If the revision is already pushed and the branch still exists, early out.
     // If the branch was deleted, restore it via branch_create before returning.
@@ -684,6 +703,14 @@ async fn collect_fragments_and_push(
             .await
             .forward::<PushError>("deserializing revision state")?;
 
+        let link_parent_state = State::deserialize(repository.clone(), state.parent_self())
+            .await
+            .forward::<PushError>("deserializing parent state")?;
+        let parent_links = link_parent_state
+            .link_list(repository.clone())
+            .await
+            .unwrap_or_default();
+
         // Push links
         if let Ok(link_list) = state.link_list(repository.clone()).await {
             // TODO(vri): UCS-17135 - Push links in individual tasks
@@ -691,9 +718,15 @@ async fn collect_fragments_and_push(
                 let link_id = link_reference.repository;
                 let link_repository = Arc::new(repository.to_link_context(link_id).await);
                 let link_signature = link_reference.signature;
-                let link_state = State::deserialize(link_repository.clone(), link_signature)
-                    .await
-                    .forward::<PushError>("deserializing link state")?;
+                let Some(link_state) = link_state_for_push(
+                    link_repository.clone(),
+                    link_reference,
+                    parent_links.as_slice(),
+                )
+                .await?
+                else {
+                    continue;
+                };
 
                 let link_branch_id = link_reference.resolve_branch(branch);
 
@@ -703,7 +736,7 @@ async fn collect_fragments_and_push(
 
                 if collect_fragments_and_push_recurse(
                     link_repository,
-                    token.share(),
+                    token.map(RepositoryWriteToken::share),
                     options.clone(),
                     link_state,
                     link_branch_id,
@@ -734,11 +767,18 @@ async fn collect_fragments_and_push(
             )
             .send();
 
-            state.set_parent_self(current_latest);
-            current_revision = state
-                .serialize(repository.clone(), token)
-                .await
-                .forward::<PushError>("serializing state")?;
+            if dry_run {
+                current_revision = state.revision();
+            } else {
+                let token = token.ok_or_else(|| {
+                    PushError::internal("push mutation is missing its repository write token")
+                })?;
+                state.set_parent_self(current_latest);
+                current_revision = state
+                    .serialize(repository.clone(), token)
+                    .await
+                    .forward::<PushError>("serializing state")?;
+            }
 
             event::LoreEvent::BranchPushRevisionUpdateEnd(
                 LoreBranchPushRevisionUpdateEndEventData {
@@ -748,7 +788,8 @@ async fn collect_fragments_and_push(
             .send();
         }
 
-        // Load parent state
+        // Re-read after a possible rebase so fragment collection uses the
+        // effective parent rather than the original local history parent.
         let state_parent = State::deserialize(repository.clone(), state.parent_self())
             .await
             .forward::<PushError>("deserializing parent state")?;
@@ -1001,16 +1042,57 @@ async fn collect_fragments_and_push(
     Ok(())
 }
 
+async fn link_state_for_push(
+    link_repository: Arc<RepositoryContext>,
+    link_reference: &LinkReference,
+    parent_links: &[LinkReference],
+) -> Result<Option<Arc<State>>, PushError> {
+    match State::deserialize(link_repository, link_reference.signature).await {
+        Ok(state) => Ok(Some(state)),
+        Err(error) if link_target_was_already_referenced(parent_links, link_reference) => {
+            lore_warn!(
+                "Skipping unchanged linked repository {} at revision {} because its content is unavailable or restricted: {error}",
+                link_reference.repository,
+                link_reference.signature,
+            );
+            Ok(None)
+        }
+        Err(error) => Err(PushError::internal_with_context(
+            error,
+            "deserializing new or changed link state",
+        )),
+    }
+}
+
+fn link_target_was_already_referenced(
+    parent_links: &[LinkReference],
+    current: &LinkReference,
+) -> bool {
+    parent_links.iter().any(|parent| {
+        parent.repository == current.repository
+            && parent.branch == current.branch
+            && parent.signature == current.signature
+    })
+}
+
 fn collect_fragments_and_push_recurse(
     repository: Arc<RepositoryContext>,
-    token: RepositoryWriteToken,
+    token: Option<RepositoryWriteToken>,
     options: PushOptions,
     state: Arc<State>,
     branch: BranchId,
     local_latest: Hash,
 ) -> Pin<Box<dyn Future<Output = Result<(), PushError>> + Send>> {
     Box::pin(async move {
-        collect_fragments_and_push(repository, &token, options, state, branch, local_latest).await
+        collect_fragments_and_push(
+            repository,
+            token.as_ref(),
+            options,
+            state,
+            branch,
+            local_latest,
+        )
+        .await
     })
 }
 
@@ -1239,4 +1321,23 @@ pub(crate) async fn push_fragments(
     lore_debug!("Pushed {} fragments", fragment_count);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod link_push_tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn only_an_unchanged_link_target_can_skip_unavailable_content() {
+        let parent = LinkReference::default();
+        let unchanged = parent;
+        let mut changed = parent;
+        changed.signature =
+            Hash::from_str(&"1".repeat(64)).expect("test signature should be valid");
+
+        assert!(link_target_was_already_referenced(&[parent], &unchanged));
+        assert!(!link_target_was_already_referenced(&[parent], &changed));
+    }
 }

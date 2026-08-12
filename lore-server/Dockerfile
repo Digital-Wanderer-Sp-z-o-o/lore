@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
+# SPDX-License-Identifier: MIT
+
+ARG LORE_BUILD_SHA=unknown
+
 FROM rust:slim-trixie AS builder
 
 RUN apt-get update && apt-get install -y \
@@ -16,12 +21,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:trixie-slim
 
+ARG LORE_BUILD_SHA
+LABEL org.opencontainers.image.revision=$LORE_BUILD_SHA
+LABEL org.opencontainers.image.source="https://github.com/Digital-Wanderer-Sp-z-o-o/lore"
+
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/loreserver-bin /usr/local/bin/loreserver
 COPY --from=builder /build/lore-server/config/default.toml /etc/lore/config/default.toml
+COPY --from=builder /build/contrib/fly/config.toml /etc/lore/config/fly.toml
 
 # Docker environment config: local stores at /data. No QUIC certificate is
 # configured, so the server generates an ephemeral self-signed cert for the
@@ -40,9 +50,8 @@ ENV LORE_ENV=docker
 ENV RUST_LOG=info
 
 RUN mkdir -p /data
-VOLUME /data
 
-# QUIC + gRPC: 41337, HTTP: 41339
-EXPOSE 41337 41339
+# QUIC (UDP) + gRPC (TCP): 41337, HTTP: 41339
+EXPOSE 41337/tcp 41337/udp 41339/tcp
 
 ENTRYPOINT ["loreserver"]

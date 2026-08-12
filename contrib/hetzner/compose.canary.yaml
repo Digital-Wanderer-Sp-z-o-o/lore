@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
+# SPDX-License-Identifier: MIT
+
+services:
+  lore-server-canary:
+    container_name: archigma-lore-staging-canary
+    image: archigma-lore-server:${LORE_SERVER_TAG:?set LORE_SERVER_TAG to the reviewed commit SHA}
+    restart: "no"
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      LORE_CONFIG_PATH: /etc/lore/config
+      LORE_ENV: hetzner
+      LORE__SERVER__HTTP__PORT: "42339"
+      LORE__SERVER__QUIC__PORT: "42337"
+      LORE__SERVER__GRPC__PORT: "42337"
+      RUST_LOG: info
+    volumes:
+      - ./config.toml:/etc/lore/config/hetzner.toml:ro
+      - ${LORE_CANARY_CACHE_ROOT:-/var/lib/lore/cache-canary}:/data/cache
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: "2"

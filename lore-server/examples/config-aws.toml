@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
+# SPDX-License-Identifier: MIT
+
 # Lore Server Configuration Example: AWS Storage
 # =====================================================================
 # This configuration demonstrates using AWS services (S3 + DynamoDB)
@@ -35,6 +38,10 @@ mode = "aws"
 s3_bucket = "urc-fragments"
 # s3_endpoint_url = "http://localhost:4566"
 # s3_region = "us-east-1"
+# For Cloudflare R2, use its S3 endpoint and disable object version enumeration:
+# s3_force_path_style = true
+# s3_object_versioning = "disabled"
+# s3_credentials = { access_key_id_env = "R2_ACCESS_KEY_ID", secret_access_key_env = "R2_SECRET_ACCESS_KEY" }
 s3_slow_operation_threshold_millis = 5000
 s3_timeout_millis = 30000
 

@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "archigma-lore-d1",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "archigma-lore-local",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "AUTH_ACCESS_KEY_ID": "lore-local",
+    "FRAGMENTS_TABLE": "archigma-lore-local-fragments",
+    "METADATA_TABLE": "archigma-lore-local-metadata",
+    "MUTABLE_TABLE": "archigma-lore-local-mutable",
+    "LOCKS_TABLE": "archigma-lore-local-locks"
+  },
+  "env": {
+    "staging": {
+      "name": "archigma-lore-d1-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "archigma-lore-staging",
+          "database_id": "b06d442b-311e-41ba-b8a6-d66e356151b2",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "vars": {
+        "AUTH_ACCESS_KEY_ID": "archigma-lore-staging",
+        "FRAGMENTS_TABLE": "archigma-lore-staging-fragments",
+        "METADATA_TABLE": "archigma-lore-staging-metadata",
+        "MUTABLE_TABLE": "archigma-lore-staging-mutable",
+        "LOCKS_TABLE": "archigma-lore-staging-locks"
+      }
+    }
+  }
+}

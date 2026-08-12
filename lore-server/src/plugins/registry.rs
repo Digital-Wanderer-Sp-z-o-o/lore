@@ -951,8 +951,8 @@ mod tests {
 
         async fn unlock_resources(
             &self,
-            _owner_id: &str,
-            _validate_user: bool,
+            _actor_id: &str,
+            _expected_owner_id: &str,
             _repository: RepositoryId,
             _resources: &[LockResource],
         ) -> Result<Vec<LockResource>, LockError> {

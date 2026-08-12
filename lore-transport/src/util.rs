@@ -16,9 +16,10 @@ impl Retry {
             return false;
         }
 
-        // Generate some jitter to avoid alignment storms
-        let jitter = rand::random::<f32>() * self.jitter;
-        let jitter = std::cmp::min((jitter * self.current as f32) as u64, 100);
+        // Keep jitter proportional to the exponential delay. Capping it at a
+        // small fixed value makes many clients line up again once the backoff
+        // grows, causing a new connection storm on every retry wave.
+        let jitter = retry_jitter(self.current, self.jitter, rand::random::<f32>());
 
         tokio::time::sleep(Duration::from_millis(self.current + jitter)).await;
 
@@ -37,6 +38,10 @@ impl Retry {
     }
 }
 
+fn retry_jitter(current: u64, jitter_ratio: f32, random_fraction: f32) -> u64 {
+    (current as f64 * jitter_ratio as f64 * random_fraction.clamp(0.0, 1.0) as f64) as u64
+}
+
 const DEFAULT_JITTER: f32 = 0.1;
 
 /// Create a retry waiter, start and maximum times in milliseconds. Will give up
@@ -48,5 +53,22 @@ pub fn retry(start: u64, maximum: u64, limit: usize) -> Retry {
         jitter: DEFAULT_JITTER,
         counter: 0,
         limit,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_jitter;
+
+    #[test]
+    fn jitter_scales_with_current_backoff() {
+        assert_eq!(retry_jitter(1_000, 0.1, 1.0), 100);
+        assert_eq!(retry_jitter(30_000, 0.1, 1.0), 3_000);
+    }
+
+    #[test]
+    fn jitter_fraction_is_bounded() {
+        assert_eq!(retry_jitter(1_000, 0.1, -1.0), 0);
+        assert_eq!(retry_jitter(1_000, 0.1, 2.0), 100);
     }
 }

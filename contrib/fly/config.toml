@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
+# SPDX-License-Identifier: MIT
+
+# Stateless Fly profile. Immutable payloads live in Cloudflare R2. The existing
+# Lore DynamoDB client talks to the signed Cloudflare Worker gateway, which
+# implements Lore's required DynamoDB operations on top of D1.
+
+[immutable_store]
+mode = "aws"
+
+[mutable_store]
+mode = "aws"
+
+[lock_store]
+mode = "aws"
+
+[plugins.aws.immutable_store]
+s3_bucket = "archigma-lore-staging"
+s3_endpoint_url = "https://df2d78fee751d9462a9ddf034ad068b5.r2.cloudflarestorage.com"
+s3_region = "auto"
+s3_force_path_style = true
+s3_object_versioning = "disabled"
+s3_credentials = { access_key_id_env = "R2_ACCESS_KEY_ID", secret_access_key_env = "R2_SECRET_ACCESS_KEY" }
+s3_slow_operation_threshold_millis = 5000
+dynamodb_fragments_table = "archigma-lore-staging-fragments"
+dynamodb_metadata_table = "archigma-lore-staging-metadata"
+dynamodb_endpoint_url = "https://archigma-lore-d1-staging.damian-podwiazka.workers.dev"
+dynamodb_region = "auto"
+dynamodb_slow_operation_threshold_millis = 2000
+timeout_millis = 15000
+
+[plugins.aws.mutable_store]
+dynamodb_table = "archigma-lore-staging-mutable"
+dynamodb_endpoint_url = "https://archigma-lore-d1-staging.damian-podwiazka.workers.dev"
+dynamodb_region = "auto"
+dynamodb_slow_operation_threshold_millis = 2000
+timeout_millis = 15000
+
+[plugins.aws.lock_store]
+dynamodb_table = "archigma-lore-staging-locks"
+dynamodb_endpoint_url = "https://archigma-lore-d1-staging.damian-podwiazka.workers.dev"
+dynamodb_region = "auto"
+dynamodb_slow_operation_threshold_millis = 1000
+timeout_millis = 15000

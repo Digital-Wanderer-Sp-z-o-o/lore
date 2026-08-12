@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Epic Games, Inc.
+// SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
 // SPDX-License-Identifier: MIT
 pub mod cert_metrics;
+mod socket_address;
 
 use lore_revision::interface::LoreGlobalArgs;
+pub(crate) use socket_address::resolve_socket_address;
 
 use crate::auth::jwt::AuthorizationToken;
 use crate::auth::jwt::ResourcePermission;

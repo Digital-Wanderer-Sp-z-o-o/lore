@@ -126,6 +126,13 @@ typedef enum lore_error_code_t {
   LORE_ERROR_CODE_SLOW_DOWN = 4,
 } lore_error_code_t;
 
+typedef enum lore_layer_recovery_operation_t {
+  // Resume adding a layer.
+  LORE_LAYER_RECOVERY_OPERATION_ADD = 0,
+  // Resume removing a layer.
+  LORE_LAYER_RECOVERY_OPERATION_REMOVE = 1,
+} lore_layer_recovery_operation_t;
+
 // The kind of value held by a metadata entry.
 typedef enum lore_metadata_type_t {
   // A block of raw bytes.
@@ -1550,6 +1557,12 @@ typedef struct lore_link_entry_event_data_t {
   struct lore_hash_t revision;
   // Link flags.
   uint32_t flags;
+  // Whether the linked repository state is available in the local store.
+  //
+  // A zero value means the caller can inspect the committed mount metadata,
+  // but the linked content is unavailable or restricted and must not be
+  // traversed.
+  uint8_t content_available;
 } lore_link_entry_event_data_t;
 
 // Data for an event that marks the start of a lock acquire report.
@@ -2858,6 +2871,46 @@ typedef struct lore_revision_tree_batch_complete_event_data_t {
   enum lore_error_code_t error_code;
 } lore_revision_tree_batch_complete_event_data_t;
 
+typedef struct lore_layer_recovery_event_data_t {
+  // Path in the outer repository where the interrupted mutation operates.
+  struct lore_string_t target_path;
+  // Repository providing the layered content.
+  lore_repository_id_t source_repository;
+  // Path inside the source repository where the layer starts.
+  struct lore_string_t source_path;
+  // Metadata used to match revisions between repositories.
+  struct lore_string_t metadata;
+  // Exact source revision persisted before the interrupted mutation began.
+  struct lore_hash_t revision;
+  // Mutation that must be repeated to resume safely.
+  enum lore_layer_recovery_operation_t operation;
+  // Whether a remove operation must purge the layer files.
+  uint8_t purge;
+  // Whether a remove operation must discard modified files.
+  uint8_t force;
+} lore_layer_recovery_event_data_t;
+
+typedef struct lore_lock_recovery_audit_begin_event_data_t {
+  uint64_t count;
+  struct lore_string_t next_cursor_event_id;
+  uint64_t next_cursor_recorded_at;
+  uint8_t has_next_cursor;
+} lore_lock_recovery_audit_begin_event_data_t;
+
+typedef struct lore_lock_recovery_audit_entry_event_data_t {
+  struct lore_string_t event_id;
+  struct lore_string_t actor_id;
+  struct lore_string_t expected_owner_id;
+  uint64_t recorded_at;
+  uint64_t resource_count;
+} lore_lock_recovery_audit_entry_event_data_t;
+
+typedef struct lore_lock_recovery_audit_resource_event_data_t {
+  struct lore_string_t event_id;
+  lore_branch_id_t branch;
+  struct lore_string_t path;
+} lore_lock_recovery_audit_resource_event_data_t;
+
 // An event delivered to a callback. Each variant names a kind of event and
 // carries the data for that event.
 enum lore_event_id_t {
@@ -3316,6 +3369,14 @@ enum lore_event_id_t {
   LORE_EVENT_COMPACTION_END,
   // A batch write call on a revision tree completed as a whole.
   LORE_EVENT_REVISION_TREE_BATCH_COMPLETE,
+  // An interrupted layer mutation that must be resumed.
+  LORE_EVENT_LAYER_RECOVERY,
+  // A page of durable administrative lock-recovery audit began.
+  LORE_EVENT_LOCK_RECOVERY_AUDIT_BEGIN,
+  // One durable administrative lock-recovery audit entry.
+  LORE_EVENT_LOCK_RECOVERY_AUDIT_ENTRY,
+  // One resource included in a lock-recovery audit entry.
+  LORE_EVENT_LOCK_RECOVERY_AUDIT_RESOURCE,
 };
 typedef uint32_t lore_event_tag_t;
 
@@ -3549,6 +3610,10 @@ typedef struct lore_event_t {
     struct lore_compaction_progress_event_data_t compaction_progress;
     struct lore_compaction_end_event_data_t compaction_end;
     struct lore_revision_tree_batch_complete_event_data_t revision_tree_batch_complete;
+    struct lore_layer_recovery_event_data_t layer_recovery;
+    struct lore_lock_recovery_audit_begin_event_data_t lock_recovery_audit_begin;
+    struct lore_lock_recovery_audit_entry_event_data_t lock_recovery_audit_entry;
+    struct lore_lock_recovery_audit_resource_event_data_t lock_recovery_audit_resource;
   };
 } lore_event_t;
 

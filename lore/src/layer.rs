@@ -7,6 +7,7 @@ use lore_macro::LoreArgs;
 use lore_revision::interface::LoreEventCallback;
 use lore_revision::interface::LoreGlobalArgs;
 use lore_revision::layer::LayerError;
+pub use lore_revision::layer::LoreLayerRecoveryOperation;
 use lore_revision::repository::RepositoryContext;
 use lore_revision::repository::RepositoryWriteToken;
 use lore_revision::util::path::RelativePath;
@@ -210,6 +211,7 @@ pub struct LoreLayerListArgs {}
 /// | Event | Description |
 /// |-------|-------------|
 /// | [`LoreEvent::LayerEntry`](crate::interface::LoreEvent::LayerEntry) | Emitted for each layer configured in the repository |
+/// | [`LoreEvent::LayerRecovery`](crate::interface::LoreEvent::LayerRecovery) | Emitted once when an interrupted layer mutation must be resumed with its persisted parameters |
 pub async fn layer_list(
     globals: LoreGlobalArgs,
     args: LoreLayerListArgs,

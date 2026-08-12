@@ -11,6 +11,44 @@ use crate::connection::Connection;
 use crate::error::ProtocolError;
 use crate::types::*;
 
+/// Server-side storage session plus the transport generation that created it.
+///
+/// QUIC reconnects replace the server connection and its session map. Keeping
+/// the generation with the raw ID prevents a late drop from stopping an
+/// unrelated session that reused the same numeric ID on the new connection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StorageSessionLease {
+    session_id: u32,
+    transport_epoch: Option<u32>,
+}
+
+impl StorageSessionLease {
+    pub const fn stable(session_id: u32) -> Self {
+        Self {
+            session_id,
+            transport_epoch: None,
+        }
+    }
+
+    pub const fn transport_scoped(session_id: u32, transport_epoch: u32) -> Self {
+        Self {
+            session_id,
+            transport_epoch: Some(transport_epoch),
+        }
+    }
+
+    pub const fn session_id(self) -> u32 {
+        self.session_id
+    }
+
+    pub const fn belongs_to_transport_epoch(self, current_epoch: u32) -> bool {
+        match self.transport_epoch {
+            Some(epoch) => epoch == current_epoch,
+            None => true,
+        }
+    }
+}
+
 /// Protocol interface
 #[async_trait]
 pub trait Protocol: Send + Sync {
@@ -76,17 +114,17 @@ pub trait Protocol: Send + Sync {
 #[async_trait]
 pub trait Storage: Send + Sync {
     /// Start a session for the given repository and correlation ID.
-    /// Returns a raw session ID. The caller is responsible for calling
+    /// Returns a session lease. The caller is responsible for calling
     /// `session_stop` when done. Prefer `StorageConnector::session()` for
     /// automatic lifecycle management.
     async fn session_start(
         &self,
         repository: RepositoryId,
         correlation_id: &str,
-    ) -> Result<u32, ProtocolError>;
+    ) -> Result<StorageSessionLease, ProtocolError>;
 
     /// Stop an active session, releasing server-side capacity.
-    async fn session_stop(&self, session_id: u32) -> Result<(), ProtocolError>;
+    async fn session_stop(&self, lease: StorageSessionLease) -> Result<(), ProtocolError>;
 
     /// Get the immutable fragment and payload for address
     async fn get(
@@ -321,7 +359,17 @@ pub trait Lock: Send + Sync {
     async fn status(&self, resources: &[LockResource]) -> Result<Vec<LockData>, ProtocolError>;
 
     /// Remove the lock over the resource(s)
-    async fn unlock(&self, resources: &[LockResource]) -> Result<Vec<LockResource>, ProtocolError>;
+    async fn unlock(
+        &self,
+        resources: &[LockResource],
+        expected_owner: Option<&str>,
+    ) -> Result<Vec<LockResource>, ProtocolError>;
+
+    /// Query the durable administrative lock-recovery audit.
+    async fn query_recovery_audit(
+        &self,
+        query: &LockRecoveryAuditQuery,
+    ) -> Result<LockRecoveryAuditPage, ProtocolError>;
 }
 
 /// Environment protocol
@@ -414,4 +462,24 @@ pub trait Authentication: Send + Sync {
         display_name: &str,
         correlation_id: &str,
     ) -> Result<Option<ResolvedUser>, ProtocolError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StorageSessionLease;
+
+    #[test]
+    fn transport_scoped_session_lease_only_matches_its_epoch() {
+        let lease = StorageSessionLease::transport_scoped(7, 12);
+        assert_eq!(lease.session_id(), 7);
+        assert!(lease.belongs_to_transport_epoch(12));
+        assert!(!lease.belongs_to_transport_epoch(13));
+    }
+
+    #[test]
+    fn stable_session_lease_is_not_epoch_scoped() {
+        let lease = StorageSessionLease::stable(9);
+        assert!(lease.belongs_to_transport_epoch(1));
+        assert!(lease.belongs_to_transport_epoch(u32::MAX));
+    }
 }

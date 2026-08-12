@@ -2474,6 +2474,7 @@ version = "0.8.7-nightly"
 dependencies = [
  "async-trait",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-dynamodb",
  "aws-sdk-s3",
  "aws-smithy-http-client",
@@ -2581,6 +2582,29 @@ dependencies = [
  "vergen",
  "windows-sys 0.61.2",
  "winresource",
+]
+
+[[package]]
+name = "lore-cloudflare"
+version = "0.8.7-nightly"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "hex",
+ "lore-base",
+ "lore-revision",
+ "lore-storage",
+ "rand",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zerocopy",
 ]
 
 [[package]]
@@ -2801,6 +2825,7 @@ dependencies = [
  "jsonwebtoken",
  "lore-aws",
  "lore-base",
+ "lore-cloudflare",
  "lore-error-set",
  "lore-hashicorp",
  "lore-macro",
@@ -2941,6 +2966,7 @@ dependencies = [
  "tonic",
  "tower",
  "url",
+ "uuid",
  "zerocopy",
 ]
 

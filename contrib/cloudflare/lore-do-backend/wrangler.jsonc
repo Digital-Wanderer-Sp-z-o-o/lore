@@ -1,0 +1,56 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "archigma-lore-do",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+  },
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "exports": {
+    "ImmutableMetadataShard": { "type": "durable-object", "storage": "sqlite" },
+    "MutablePartitionStore": { "type": "durable-object", "storage": "sqlite" },
+    "LockCoordinator": { "type": "durable-object", "storage": "sqlite" },
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "IMMUTABLE_METADATA", "class_name": "ImmutableMetadataShard" },
+      { "name": "MUTABLE_PARTITIONS", "class_name": "MutablePartitionStore" },
+      { "name": "LOCK_COORDINATOR", "class_name": "LockCoordinator" },
+    ],
+  },
+  "r2_buckets": [
+    { "binding": "PAYLOADS", "bucket_name": "archigma-lore-local" },
+  ],
+  "secrets": { "required": ["AUTH_SECRET_ACCESS_KEY"] },
+  "vars": {
+    "MAX_BATCH_SIZE": "256",
+    "LOCK_LEASE_SECONDS": "86400",
+  },
+  "env": {
+    "staging": {
+      "name": "archigma-lore-do-staging",
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "IMMUTABLE_METADATA",
+            "class_name": "ImmutableMetadataShard",
+          },
+          {
+            "name": "MUTABLE_PARTITIONS",
+            "class_name": "MutablePartitionStore",
+          },
+          { "name": "LOCK_COORDINATOR", "class_name": "LockCoordinator" },
+        ],
+      },
+      "r2_buckets": [
+        { "binding": "PAYLOADS", "bucket_name": "archigma-lore-staging" },
+      ],
+      "secrets": { "required": ["AUTH_SECRET_ACCESS_KEY"] },
+      "vars": { "MAX_BATCH_SIZE": "256", "LOCK_LEASE_SECONDS": "86400" },
+    },
+  },
+}

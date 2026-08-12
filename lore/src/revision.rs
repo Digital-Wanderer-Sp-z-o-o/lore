@@ -954,6 +954,18 @@ pub struct LoreRevisionDiffArgs {
     pub paths: LoreArray<LoreString>,
 }
 
+/// Arguments for diffing revisions in a linked or layered repository that is
+/// available through the current root working copy.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoreRevisionRelatedDiffArgs {
+    pub repository: lore_revision::lore::RepositoryId,
+    pub kind: crate::repository::LoreRelatedRepositoryKind,
+    pub revision_source: LoreString,
+    pub revision_target: LoreString,
+    pub paths: LoreArray<LoreString>,
+}
+
 /// Computes the file-level differences between two revisions.
 ///
 /// # Events
@@ -981,6 +993,36 @@ pub async fn diff(
     callback: LoreEventCallback,
 ) -> i32 {
     dispatch_call(globals, args, callback, diff_local).await
+}
+
+/// Computes a file-level revision diff inside a related repository context.
+/// The root working copy is opened read-only and provides the shared stores and
+/// remote connection; the emitted paths are relative to the related repository.
+pub async fn diff_related(
+    globals: LoreGlobalArgs,
+    args: LoreRevisionRelatedDiffArgs,
+    callback: LoreEventCallback,
+) -> i32 {
+    repository_call_read(
+        globals,
+        callback,
+        args,
+        diff_related,
+        |root, args| async move {
+            let repository =
+                crate::repository::related_context(&root, args.repository, args.kind).await;
+            diff_impl(
+                repository,
+                LoreRevisionDiffArgs {
+                    revision_source: args.revision_source,
+                    revision_target: args.revision_target,
+                    paths: args.paths,
+                },
+            )
+            .await
+        },
+    )
+    .await
 }
 
 async fn diff_local(

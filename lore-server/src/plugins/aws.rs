@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Epic Games, Inc.
+// SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
 // SPDX-License-Identifier: MIT
 //! AWS store plugin factories.
 //!
@@ -16,6 +17,7 @@ use lore_aws::clients::TimeoutConfig;
 use lore_aws::store::immutable_store::AwsImmutableStore;
 use lore_aws::store::immutable_store::AwsImmutableStoreSettings;
 use lore_aws::store::immutable_store::DynamoDbImmutableStoreSettings;
+use lore_aws::store::immutable_store::S3ObjectVersioning;
 use lore_aws::store::immutable_store::S3StoreSettings;
 use lore_aws::store::lock_store::DynamoDbLockStore;
 use lore_aws::store::mutable_store::AwsMutableStore;
@@ -39,10 +41,62 @@ use crate::plugins::PluginError;
 use crate::plugins::PluginRegistry;
 
 const PLUGIN_NAME: &str = "aws";
+const S3_CREDENTIALS_PROVIDER_NAME: &str = "lore-s3-static-environment";
 
 // =============================================================================
 // Configuration Structs
 // =============================================================================
+
+/// Names of environment variables containing credentials for an S3-compatible service.
+///
+/// This keeps R2 credentials independent from the default AWS credential chain used by
+/// `DynamoDB`, while ensuring secret values never appear in TOML or debug output.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AwsCredentialsEnvironmentConfig {
+    pub access_key_id_env: String,
+    pub secret_access_key_env: String,
+    #[serde(default)]
+    pub session_token_env: Option<String>,
+}
+
+struct ResolvedAwsCredentials {
+    access_key_id: String,
+    secret_access_key: String,
+    session_token: Option<String>,
+}
+
+impl AwsCredentialsEnvironmentConfig {
+    fn resolve(&self) -> Result<ResolvedAwsCredentials, PluginError> {
+        Ok(ResolvedAwsCredentials {
+            access_key_id: read_required_environment_variable(&self.access_key_id_env)?,
+            secret_access_key: read_required_environment_variable(&self.secret_access_key_env)?,
+            session_token: self
+                .session_token_env
+                .as_deref()
+                .map(read_required_environment_variable)
+                .transpose()?,
+        })
+    }
+}
+
+fn read_required_environment_variable(name: &str) -> Result<String, PluginError> {
+    if name.trim().is_empty() {
+        return Err(PluginError::from(PluginConfigError {
+            plugin_name: PLUGIN_NAME.to_string(),
+            message: "S3 credential environment variable name must not be empty".to_string(),
+        }));
+    }
+
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            PluginError::from(PluginConfigError {
+                plugin_name: PLUGIN_NAME.to_string(),
+                message: format!("S3 credential environment variable '{name}' is missing or empty"),
+            })
+        })
+}
 
 /// Configuration for the AWS immutable store plugin.
 ///
@@ -65,6 +119,14 @@ pub struct AwsImmutableStorePluginConfig {
     /// Optional S3 region.
     #[serde(default)]
     pub s3_region: Option<String>,
+
+    /// Optional S3-only credentials sourced from named environment variables.
+    #[serde(default)]
+    pub s3_credentials: Option<AwsCredentialsEnvironmentConfig>,
+
+    /// Whether payload obliteration should enumerate all object versions first.
+    #[serde(default)]
+    pub s3_object_versioning: S3ObjectVersioning,
 
     /// `DynamoDB` table name for storing fragment associations.
     pub dynamodb_fragments_table: String,
@@ -226,35 +288,47 @@ impl ImmutableStorePluginFactory for AwsImmutableStorePluginFactory {
             "Creating AWS immutable store: {plugin_config:?}"
         );
 
+        let s3_credentials = plugin_config
+            .s3_credentials
+            .as_ref()
+            .map(AwsCredentialsEnvironmentConfig::resolve)
+            .transpose()?;
+
         let (s3_client, dynamodb_client) = tokio::task::block_in_place(|| {
             runtime().block_on(Box::pin(async {
                 // Build S3 client
-                let s3_client = Box::pin(
-                    AwsClientBuilder::builder()
-                        .with_http_settings(&plugin_config.http)
-                        .maybe_endpoint(plugin_config.s3_endpoint_url.clone())
-                        .maybe_region(plugin_config.s3_region.clone())
-                        .with_timeout_config(
-                            TimeoutConfig::builder()
-                                .operation_timeout(Duration::from_millis(
-                                    plugin_config.timeout_millis,
-                                ))
-                                .build(),
-                        )
-                        .build_config(),
-                )
-                .await
-                .with_slow_operation_threshold(plugin_config.s3_slow_operation_threshold_millis)
-                .s3_with_path_style(plugin_config.s3_force_path_style)
-                .ensure_bucket(&plugin_config.s3_bucket)
-                .build()
-                .await
-                .map_err(|e| {
-                    PluginError::from(PluginInitError {
-                        plugin_name: plugin_name.to_string(),
-                        message: format!("Failed to create S3 client: {e}"),
-                    })
-                })?;
+                let mut s3_client_builder = AwsClientBuilder::builder()
+                    .with_http_settings(&plugin_config.http)
+                    .maybe_endpoint(plugin_config.s3_endpoint_url.clone())
+                    .maybe_region(plugin_config.s3_region.clone())
+                    .with_timeout_config(
+                        TimeoutConfig::builder()
+                            .operation_timeout(Duration::from_millis(plugin_config.timeout_millis))
+                            .build(),
+                    );
+
+                if let Some(credentials) = s3_credentials {
+                    s3_client_builder = s3_client_builder.with_static_credentials(
+                        credentials.access_key_id,
+                        credentials.secret_access_key,
+                        credentials.session_token,
+                        S3_CREDENTIALS_PROVIDER_NAME,
+                    );
+                }
+
+                let s3_client = Box::pin(s3_client_builder.build_config())
+                    .await
+                    .with_slow_operation_threshold(plugin_config.s3_slow_operation_threshold_millis)
+                    .s3_with_path_style(plugin_config.s3_force_path_style)
+                    .ensure_bucket(&plugin_config.s3_bucket)
+                    .build()
+                    .await
+                    .map_err(|e| {
+                        PluginError::from(PluginInitError {
+                            plugin_name: plugin_name.to_string(),
+                            message: format!("Failed to create S3 client: {e}"),
+                        })
+                    })?;
 
                 // Build DynamoDB client
                 let dynamodb_client_builder = Box::pin(
@@ -300,6 +374,7 @@ impl ImmutableStorePluginFactory for AwsImmutableStorePluginFactory {
             region: plugin_config.s3_region,
             slow_operation_threshold_millis: plugin_config.s3_slow_operation_threshold_millis,
             timeout_millis: plugin_config.timeout_millis,
+            object_versioning: plugin_config.s3_object_versioning,
         };
 
         let dynamodb_settings = DynamoDbImmutableStoreSettings {
@@ -634,6 +709,8 @@ mod tests {
             s3_bucket = "test-bucket"
             s3_endpoint_url = "http://localhost:4566"
             s3_region = "us-east-1"
+            s3_credentials = { access_key_id_env = "R2_ACCESS_KEY_ID", secret_access_key_env = "R2_SECRET_ACCESS_KEY" }
+            s3_object_versioning = "disabled"
             dynamodb_fragments_table = "fragments"
             dynamodb_metadata_table = "metadata"
             dynamodb_endpoint_url = "http://localhost:4566"
@@ -653,6 +730,15 @@ mod tests {
             Some("http://localhost:4566".to_string())
         );
         assert_eq!(plugin_config.s3_region, Some("us-east-1".to_string()));
+        let credentials = plugin_config
+            .s3_credentials
+            .expect("S3 credentials config should be present");
+        assert_eq!(credentials.access_key_id_env, "R2_ACCESS_KEY_ID");
+        assert_eq!(credentials.secret_access_key_env, "R2_SECRET_ACCESS_KEY");
+        assert_eq!(
+            plugin_config.s3_object_versioning,
+            S3ObjectVersioning::Disabled
+        );
         assert_eq!(plugin_config.dynamodb_fragments_table, "fragments");
         assert_eq!(plugin_config.dynamodb_metadata_table, "metadata");
         assert_eq!(
@@ -680,6 +766,11 @@ mod tests {
         assert_eq!(plugin_config.s3_bucket, "test-bucket");
         assert!(plugin_config.s3_endpoint_url.is_none());
         assert!(plugin_config.s3_region.is_none());
+        assert!(plugin_config.s3_credentials.is_none());
+        assert_eq!(
+            plugin_config.s3_object_versioning,
+            S3ObjectVersioning::Enabled
+        );
         assert_eq!(plugin_config.dynamodb_fragments_table, "fragments");
         assert_eq!(plugin_config.dynamodb_metadata_table, "metadata");
         assert!(plugin_config.dynamodb_endpoint_url.is_none());
@@ -691,6 +782,28 @@ mod tests {
         );
         assert_eq!(plugin_config.timeout_millis, 5000);
         assert!(!plugin_config.force_write);
+    }
+
+    #[test]
+    fn test_s3_credentials_resolve_from_configured_environment_variables() {
+        temp_env::with_vars(
+            [
+                ("LORE_TEST_R2_ACCESS_KEY_ID", Some("test-access-key")),
+                ("LORE_TEST_R2_SECRET_ACCESS_KEY", Some("test-secret-key")),
+            ],
+            || {
+                let config = AwsCredentialsEnvironmentConfig {
+                    access_key_id_env: "LORE_TEST_R2_ACCESS_KEY_ID".to_string(),
+                    secret_access_key_env: "LORE_TEST_R2_SECRET_ACCESS_KEY".to_string(),
+                    session_token_env: None,
+                };
+
+                let credentials = config.resolve().expect("credentials should resolve");
+                assert_eq!(credentials.access_key_id, "test-access-key");
+                assert_eq!(credentials.secret_access_key, "test-secret-key");
+                assert!(credentials.session_token.is_none());
+            },
+        );
     }
 
     #[tokio::test]

@@ -124,6 +124,7 @@ use crate::interface::LoreMetadata;
 use crate::interface::LoreString;
 use crate::layer::LoreLayerAddEventData;
 use crate::layer::LoreLayerEntryEventData;
+use crate::layer::LoreLayerRecoveryEventData;
 use crate::layer::LoreLayerRemoveEventData;
 use crate::layer::LoreLayerStagedEntryEventData;
 use crate::link::LoreLinkChangeEventData;
@@ -133,6 +134,9 @@ use crate::lock::file::acquire::LoreLockFileAcquireBeginEventData;
 use crate::lock::file::acquire::LoreLockFileAcquireEventData;
 use crate::lock::file::query::LoreLockFileQueryBeginEventData;
 use crate::lock::file::query::LoreLockFileQueryEventData;
+use crate::lock::file::recovery_audit::LoreLockRecoveryAuditBeginEventData;
+use crate::lock::file::recovery_audit::LoreLockRecoveryAuditEntryEventData;
+use crate::lock::file::recovery_audit::LoreLockRecoveryAuditResourceEventData;
 use crate::lock::file::release::LoreLockFileReleaseBeginEventData;
 use crate::lock::file::release::LoreLockFileReleaseEventData;
 use crate::lock::file::status::LoreLockFileStatusBeginEventData;
@@ -1137,6 +1141,16 @@ pub enum LoreEvent {
     CompactionEnd(LoreCompactionEndEventData),
     /// A batch write call on a revision tree completed as a whole.
     RevisionTreeBatchComplete(LoreRevisionTreeBatchCompleteEventData),
+    // New public events must be appended so existing `#[repr(C, u32)]` discriminants remain
+    // stable for C API consumers.
+    /// An interrupted layer mutation that must be resumed.
+    LayerRecovery(LoreLayerRecoveryEventData),
+    /// A page of durable administrative lock-recovery audit began.
+    LockRecoveryAuditBegin(LoreLockRecoveryAuditBeginEventData),
+    /// One durable administrative lock-recovery audit entry.
+    LockRecoveryAuditEntry(LoreLockRecoveryAuditEntryEventData),
+    /// One resource included in a lock-recovery audit entry.
+    LockRecoveryAuditResource(LoreLockRecoveryAuditResourceEventData),
 }
 
 impl LoreEvent {

@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
+# SPDX-License-Identifier: MIT
+
+# Single-node Hetzner staging profile. The local store is a disposable NVMe
+# cache. R2 and the metadata backend remain the source of truth.
+
+[server.http]
+host = "127.0.0.1"
+
+[server.quic]
+host = "10.80.0.10"
+idle_timeout = 300_000
+handler_timeout_seconds = 300
+
+[server.grpc]
+host = "10.80.0.10"
+request_handler_timeout_seconds = 300
+
+[server.auth]
+jwt_issuer = "https://rendermoon-staging.fly.dev"
+jwt_audience = ["lore-service"]
+
+[server.auth.jwk]
+endpoint = "https://rendermoon-staging.fly.dev/api/v1/lore/auth/jwks.json"
+
+[environment.endpoint]
+auth_url = "ucs-auth://rendermoon-staging.fly.dev"
+
+[immutable_store]
+mode = "composite"
+
+[immutable_store.composite]
+should_cache_query_results = true
+
+[immutable_store.composite.local]
+mode = "local"
+local.path = "/data/cache"
+local.flush_delay_seconds = 10
+local.max_size = 429_496_729_600 # 400 GiB on a roughly 500 GB usable filesystem
+local.target_size_percentage = 80
+local.compaction_delay = 60_000
+local.compaction_parallel_groups = 8
+
+[immutable_store.composite.durable]
+mode = "cloudflare"
+
+[mutable_store]
+mode = "cloudflare"
+
+[lock_store]
+mode = "cloudflare"
+
+[plugins.cloudflare]
+endpoint_url = "https://archigma-lore-do-staging.damian-podwiazka.workers.dev"
+auth_shared_secret_env = "LORE_CLOUDFLARE_SHARED_SECRET"
+timeout_millis = 15_000
+
+[topology]
+provider = "none"

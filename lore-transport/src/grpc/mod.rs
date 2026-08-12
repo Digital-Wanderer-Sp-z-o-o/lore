@@ -995,7 +995,7 @@ impl Storage for GRPCStorage {
         &self,
         repository: RepositoryId,
         correlation_id: &str,
-    ) -> Result<u32, ProtocolError> {
+    ) -> Result<StorageSessionLease, ProtocolError> {
         let auth = self
             .connection
             .repository_authz(&self.auth_url, &self.identity, repository)
@@ -1013,10 +1013,11 @@ impl Storage for GRPCStorage {
                 auth_token: token,
             },
         );
-        Ok(session_id)
+        Ok(StorageSessionLease::stable(session_id))
     }
 
-    async fn session_stop(&self, session_id: u32) -> Result<(), ProtocolError> {
+    async fn session_stop(&self, lease: StorageSessionLease) -> Result<(), ProtocolError> {
+        let session_id = lease.session_id();
         self.sessions.remove(&session_id);
         self.client.remove_session_streams(session_id);
         Ok(())
@@ -1536,10 +1537,35 @@ impl Lock for GRPCLock {
         }
     }
 
-    async fn unlock(&self, resources: &[LockResource]) -> Result<Vec<LockResource>, ProtocolError> {
+    async fn unlock(
+        &self,
+        resources: &[LockResource],
+        expected_owner: Option<&str>,
+    ) -> Result<Vec<LockResource>, ProtocolError> {
         let reconnect_id = self.connection.reconnect.load(Ordering::Relaxed);
         loop {
-            let result = self.client.read().await.unlock(resources).await;
+            let result = self
+                .client
+                .read()
+                .await
+                .unlock(resources, expected_owner)
+                .await;
+            match result {
+                Err(ProtocolError::Disconnected(_)) => {
+                    self.reconnect(reconnect_id).await?;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    async fn query_recovery_audit(
+        &self,
+        query: &LockRecoveryAuditQuery,
+    ) -> Result<LockRecoveryAuditPage, ProtocolError> {
+        let reconnect_id = self.connection.reconnect.load(Ordering::Relaxed);
+        loop {
+            let result = self.client.read().await.query_recovery_audit(query).await;
             match result {
                 Err(ProtocolError::Disconnected(_)) => {
                     self.reconnect(reconnect_id).await?;

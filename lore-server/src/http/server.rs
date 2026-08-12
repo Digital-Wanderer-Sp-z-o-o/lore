@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Epic Games, Inc.
+// SPDX-FileCopyrightText: 2026 Digital Wanderer Sp. z o.o.
 // SPDX-License-Identifier: MIT
 use std::future::Future;
-use std::net::SocketAddr;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
@@ -32,6 +31,7 @@ use crate::auth::jwt::JwtVerifier;
 use crate::auth::jwt_axum_middleware::jwt_axum_verify_authorization;
 use crate::correlation::layer::CorrelationIdLayerBuilder;
 use crate::http::repositories;
+use crate::util::resolve_socket_address;
 
 #[derive(Clone, Debug)]
 pub struct LoreHttpServer {}
@@ -194,7 +194,8 @@ impl LoreHttpServer {
         user_agent_filter: Arc<UserAgentFilter>,
         signal: impl Future<Output = ()> + Send + 'static,
     ) -> Result<()> {
-        let addr = SocketAddr::from_str(format!("{host}:{port}").as_str())
+        let addr = resolve_socket_address(&host, port)
+            .await
             .map_err(|err| anyhow!("Failed to start maintenance HTTP server: {err}"))?;
         info!("Starting Lore maintenance HTTP Server: {}", &addr);
 
@@ -229,7 +230,8 @@ impl LoreHttpServer {
         jwt_verifier: Option<JwtVerifier>,
         signal: impl Future<Output = ()> + Send + 'static,
     ) -> Result<()> {
-        let addr = SocketAddr::from_str(format!("{}:{}", settings.host, settings.port).as_str())
+        let addr = resolve_socket_address(&settings.host, settings.port)
+            .await
             .map_err(|err| anyhow!("Failed to start HTTP server: {err}"))?;
         info!(
             "Starting Lore HTTP Server: {}, Auth: {}",
