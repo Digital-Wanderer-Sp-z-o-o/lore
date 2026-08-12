@@ -13,7 +13,7 @@ use tokio::net::lookup_host;
 /// Accepting hostnames is required for special bind targets such as Fly.io's
 /// `fly-global-services`; parsing IP literals first keeps normal local binds deterministic.
 pub(crate) async fn resolve_socket_address(host: &str, port: i32) -> Result<SocketAddr> {
-    let port = u16::try_from(port).map_err(|_| anyhow!("invalid port {port}"))?;
+    let port = u16::try_from(port).map_err(|_range_error| anyhow!("invalid port {port}"))?;
 
     if let Ok(ip) = host.parse::<IpAddr>() {
         return Ok(SocketAddr::new(ip, port));

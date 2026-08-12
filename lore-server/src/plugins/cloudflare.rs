@@ -63,7 +63,7 @@ impl CloudflarePluginConfig {
 
     fn client(&self) -> Result<CloudflareClient, PluginError> {
         self.validate()?;
-        let secret = std::env::var(&self.auth_shared_secret_env).map_err(|_| {
+        let secret = std::env::var(&self.auth_shared_secret_env).map_err(|_env_error| {
             PluginError::from(PluginInitError {
                 plugin_name: PLUGIN_NAME.to_string(),
                 message: format!(

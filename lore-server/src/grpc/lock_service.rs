@@ -509,8 +509,9 @@ fn recovery_audit_query(request: RecoveryAuditRequest) -> Result<LockRecoveryAud
     let cursor = request
         .cursor
         .map(|cursor| -> Result<LockRecoveryAuditCursor, Status> {
-            let event_id = uuid::Uuid::from_slice(&cursor.event_id)
-                .map_err(|_| Status::invalid_argument("audit cursor event ID must be a UUID"))?;
+            let event_id = uuid::Uuid::from_slice(&cursor.event_id).map_err(|_uuid_error| {
+                Status::invalid_argument("audit cursor event ID must be a UUID")
+            })?;
             let recorded_at = timestamp_millis(cursor.recorded_at.as_ref(), "audit cursor")?;
             Ok(LockRecoveryAuditCursor::new(event_id, recorded_at))
         })
@@ -554,8 +555,9 @@ fn timestamp_millis(
             "{field} timestamp is invalid"
         )));
     }
-    let seconds = u64::try_from(timestamp.seconds)
-        .map_err(|_| Status::invalid_argument(format!("{field} timestamp is invalid")))?;
+    let seconds = u64::try_from(timestamp.seconds).map_err(|_timestamp_error| {
+        Status::invalid_argument(format!("{field} timestamp is invalid"))
+    })?;
     seconds
         .checked_mul(1_000)
         .and_then(|value| value.checked_add(timestamp.nanos as u64 / 1_000_000))
