@@ -112,6 +112,7 @@ include = [
 "LoreAuthListArgs" = "lore_auth_list_args_t"
 "LoreAuthLogoutArgs" = "lore_auth_logout_args_t"
 "LoreAuthClearArgs" = "lore_auth_clear_args_t"
+"LoreAuthRefreshArgs" = "lore_auth_refresh_args_t"
 "LoreAuthLocalUserInfoArgs" = "lore_auth_local_user_info_args_t"
 "LoreBinary" = "lore_binary_t"
 "LoreBranchCreateArgs" = "lore_branch_create_args_t"

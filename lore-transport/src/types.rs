@@ -220,9 +220,9 @@ pub struct AuthenticationToken {
     pub expires_ms: u64,
     /// Root domains this token is valid for.
     pub acceptable_root_domains: Vec<String>,
-    /// One-time-use refresh token for obtaining a new authentication token
+    /// Rotating refresh credential for obtaining a new authentication token
     /// without re-authenticating. `None` if the auth backend does not support
-    /// refresh. Consumed on use -- the next refresh returns a new one.
+    /// refresh. A successful refresh returns the credential to store next.
     pub refresh_token: Option<String>,
 }
 

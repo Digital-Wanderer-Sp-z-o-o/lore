@@ -17,6 +17,7 @@ pub enum LoreCommand {
     AuthList(crate::auth::LoreAuthListArgs),
     AuthLogout(crate::auth::LoreAuthLogoutArgs),
     AuthClear(crate::auth::LoreAuthClearArgs),
+    AuthRefresh(crate::auth::LoreAuthRefreshArgs),
     AuthLocalUserInfo(crate::auth::LoreAuthLocalUserInfoArgs),
     BranchCreate(crate::branch::LoreBranchCreateArgs),
     BranchInfo(crate::branch::LoreBranchInfoArgs),

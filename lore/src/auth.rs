@@ -547,6 +547,52 @@ async fn clear_local(
         .await
 }
 
+/// Arguments for silently refreshing a locally stored authentication session.
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, LoreArgs)]
+#[handler(refresh_impl)]
+pub struct LoreAuthRefreshArgs {
+    /// Auth service URL that owns the stored identity.
+    pub auth_endpoint: LoreString,
+    /// Stored user identity to refresh.
+    pub user_id: LoreString,
+    /// Remote hostname that must be covered by the refreshed token.
+    pub recipient_domain: LoreString,
+}
+
+/// Ensures that a locally stored authentication session has a fresh token.
+///
+/// A valid token is reused. An expired or nearly expired token is silently
+/// replaced using the encrypted refresh credential saved during login.
+pub async fn refresh(
+    globals: LoreGlobalArgs,
+    args: LoreAuthRefreshArgs,
+    callback: LoreEventCallback,
+) -> i32 {
+    dispatch_call(globals, args, callback, refresh_impl).await
+}
+
+async fn refresh_impl(
+    globals: LoreGlobalArgs,
+    args: LoreAuthRefreshArgs,
+    callback: LoreEventCallback,
+) -> i32 {
+    let execution = setup_execution(globals, callback);
+
+    LORE_CONTEXT
+        .scope(execution, async move {
+            let result = lore_transport::auth::exchange::ensure_fresh_authentication(
+                args.auth_endpoint.as_str(),
+                args.user_id.as_str(),
+                args.recipient_domain.as_str(),
+            )
+            .await
+            .forward::<AuthStoreError>("refreshing stored authentication");
+            execution_context().dispatcher.complete_result(result).await
+        })
+        .await
+}
+
 /// Arguments for resolving user identities from locally stored JWT tokens.
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, LoreArgs)]
