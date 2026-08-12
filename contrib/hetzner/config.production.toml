@@ -39,7 +39,7 @@ jwt_audience = ["lore-service"]
 endpoint = "https://archigma.com/api/v1/lore/auth/jwks.json"
 
 [environment.endpoint]
-auth_url = "ucs-auth://archigma.com"
+auth_url = "ucs-auth://auth.archigma.com"
 
 [immutable_store]
 mode = "composite"

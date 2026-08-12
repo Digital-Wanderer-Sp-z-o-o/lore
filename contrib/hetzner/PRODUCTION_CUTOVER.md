@@ -26,6 +26,10 @@ post-cutover verification is complete.
   `origin/main`; never deploy a branch tip.
 - Verify `https://archigma.com/api/v1/health` and
   `https://archigma.com/api/v1/lore/auth/jwks.json` before touching Hetzner.
+- Verify that the native LORE gRPC authentication flow reaches
+  `ucs-auth://auth.archigma.com`. Keep this hostname DNS-only: the proxied
+  `archigma.com` web endpoint can pass ordinary HTTPS while still rejecting or
+  corrupting HTTP/2 gRPC traffic.
 - The JWKS must expose the expected production RS256 key and LORE's audience
   list must include `lore.archigma.com`, `lore.rendermoon.com`, and
   `lore-service`.
@@ -61,6 +65,11 @@ curl --fail --silent --show-error \
 Also retain the current Worker deployment/version JSON, Worker health, R2
 bucket metadata, and a read-only authenticated repository list. That list must
 contain the expected IDs before and after cutover.
+
+Before repository registration, start and poll a disposable native auth
+session against `ucs-auth://auth.archigma.com`. A successful web health check
+or JWKS response is not evidence that the gRPC auth transport works. Do not use
+the Cloudflare-proxied apex as the LORE auth endpoint.
 
 ## 2. Register production identity and repositories
 

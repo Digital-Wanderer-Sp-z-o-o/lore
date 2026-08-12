@@ -226,7 +226,7 @@ mod tests {
         );
         assert_eq!(
             profile["environment"]["endpoint"]["auth_url"].as_str(),
-            Some("ucs-auth://archigma.com")
+            Some("ucs-auth://auth.archigma.com")
         );
         assert_valid_cloudflare_profile(&profile);
     }
