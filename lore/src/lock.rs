@@ -322,7 +322,7 @@ fn recovery_audit_options(
         }
         None
     } else {
-        let event_id = Uuid::parse_str(args.cursor_event_id.as_str()).map_err(|_| {
+        let event_id = Uuid::parse_str(args.cursor_event_id.as_str()).map_err(|_uuid_error| {
             RecoveryAuditError::from(lore_base::error::InvalidArguments {
                 reason: "lock recovery audit cursor event ID must be a UUID".into(),
             })

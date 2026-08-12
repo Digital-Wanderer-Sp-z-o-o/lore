@@ -113,7 +113,7 @@ impl CloudflareClient {
     ) -> Result<reqwest::Response, CloudflareClientError> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|_| CloudflareClientError::InvalidClock)?
+            .map_err(|_clock_error| CloudflareClientError::InvalidClock)?
             .as_secs()
             .to_string();
         let body_digest = digest::digest(&digest::SHA256, &body);

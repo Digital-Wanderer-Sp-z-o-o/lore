@@ -124,7 +124,7 @@ impl MutableStore for CloudflareMutableStore {
         for entry in response.entries {
             sender
                 .send((entry.key, entry.value))
-                .map_err(|_| StoreError::internal("mutable list receiver closed"))?;
+                .map_err(|_receiver_error| StoreError::internal("mutable list receiver closed"))?;
         }
         Ok(stream)
     }

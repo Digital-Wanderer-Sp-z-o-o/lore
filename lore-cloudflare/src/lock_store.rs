@@ -429,7 +429,7 @@ fn recovery_audit_page(
             ));
         }
         let event_id = Uuid::parse_str(&event.event_id)
-            .map_err(|_| invalid_audit_response("audit event ID was not a UUID"))?;
+            .map_err(|_uuid_error| invalid_audit_response("audit event ID was not a UUID"))?;
         entries.push(
             LockRecoveryAuditEntry::try_new(
                 event_id,
@@ -453,7 +453,9 @@ fn recovery_audit_page(
         .map(|cursor| {
             Uuid::parse_str(&cursor.event_id)
                 .map(|event_id| LockRecoveryAuditCursor::new(event_id, cursor.recorded_at))
-                .map_err(|_| invalid_audit_response("audit cursor event ID was not a UUID"))
+                .map_err(|_uuid_error| {
+                    invalid_audit_response("audit cursor event ID was not a UUID")
+                })
         })
         .transpose()?;
     if let Some(cursor) = &next_cursor {
