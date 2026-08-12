@@ -100,7 +100,7 @@ pub async fn ensure_fresh_authentication(
 
     let refresh_token = token_store::load_refresh_token(auth_url, identity)
         .await
-        .map_err(|_| ExchangeError::from(NotAuthenticated))?;
+        .map_err(|_response_error| ExchangeError::from(NotAuthenticated))?;
     let auth_impl = authentication::find(auth_url)
         .forward::<ExchangeError>("finding authentication handler")?;
     let refreshed = auth_impl
