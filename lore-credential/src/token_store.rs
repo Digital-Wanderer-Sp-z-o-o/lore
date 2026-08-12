@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use std::str;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use atomic_write_file::AtomicWriteFile;
 use base64::prelude::BASE64_STANDARD;
