@@ -13,6 +13,7 @@ pub mod branch_query;
 pub mod branch_revision_list;
 pub mod branch_unprotect;
 pub mod obliterate;
+pub mod obliteration_audit;
 pub mod path_diff;
 pub mod repository_create;
 pub mod repository_delete;

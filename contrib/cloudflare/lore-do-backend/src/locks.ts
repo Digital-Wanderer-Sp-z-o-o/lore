@@ -56,10 +56,12 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
     repository: string,
     resources: readonly LockResourceDto[],
     lockedAt: number,
-    leaseDurationMs: number,
+    leaseDurationMs?: number,
   ): LockMutationResult {
     return this.ctx.storage.transactionSync(() => {
-      this.deleteExpired(lockedAt, leaseDurationMs);
+      if (leaseDurationMs !== undefined) {
+        this.deleteExpired(lockedAt, leaseDurationMs);
+      }
       const unique = deduplicate(resources);
       const existingByKey = new Map<string, LockRow>();
       for (const resource of unique) {
@@ -72,33 +74,54 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
       const newlyLocked: LockDataDto[] = [];
       for (const resource of unique) {
         if (existingByKey.has(`${resource.hash}:${resource.branch}`)) {
-          this.ctx.storage.sql.exec(
-            "UPDATE locks SET description = ?, locked_at = ? WHERE hash = ? AND repository_id = ? AND branch_id = ? AND owner_id = ?",
-            resource.description,
-            lockedAt,
-            resource.hash,
-            repository,
-            resource.branch,
-            owner,
-          );
-        } else {
-          this.ctx.storage.sql.exec(
-            "INSERT INTO locks(hash, repository_id, branch_id, description, owner_id, locked_at) VALUES (?, ?, ?, ?, ?, ?)",
-            resource.hash,
-            repository,
-            resource.branch,
-            resource.description,
-            owner,
-            lockedAt,
-          );
-          newlyLocked.push({ resource, owner, lockedAt });
+          if (leaseDurationMs !== undefined) {
+            this.ctx.storage.sql.exec(
+              "UPDATE locks SET description = ?, locked_at = ? WHERE hash = ? AND repository_id = ? AND branch_id = ? AND owner_id = ?",
+              resource.description,
+              lockedAt,
+              resource.hash,
+              repository,
+              resource.branch,
+              owner,
+            );
+          }
+          continue;
         }
+        this.ctx.storage.sql.exec(
+          "INSERT INTO locks(hash, repository_id, branch_id, description, owner_id, locked_at) VALUES (?, ?, ?, ?, ?, ?)",
+          resource.hash,
+          repository,
+          resource.branch,
+          resource.description,
+          owner,
+          lockedAt,
+        );
+        newlyLocked.push({ resource, owner, lockedAt });
       }
       return { status: "ok", locks: newlyLocked };
     });
   }
 
   public unlockResources(
+    owner: string,
+    validateUser: boolean,
+    repository: string,
+    resources: readonly LockResourceDto[],
+    now?: number,
+    leaseDurationMs?: number,
+  ): LockMutationResult {
+    return this.ctx.storage.transactionSync(() => {
+      this.deleteExpiredIfEnabled(now, leaseDurationMs);
+      return this.releaseComparedResources(
+        owner,
+        validateUser,
+        repository,
+        resources,
+      );
+    });
+  }
+
+  public recoverResources(
     actor: string,
     expectedOwner: string,
     repository: string,
@@ -106,34 +129,30 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
     now: number,
     leaseDurationMs: number,
   ): LockMutationResult {
+    if (actor === expectedOwner) {
+      throw new Error(
+        "CONFLICT: administrative recovery requires a foreign owner",
+      );
+    }
     return this.ctx.storage.transactionSync(() => {
       this.deleteExpired(now, leaseDurationMs);
-      const unique = deduplicate(resources);
-      for (const resource of unique) {
-        const existing = this.get(repository, resource);
-        if (existing === undefined) return { status: "not_found" };
-        if (existing.owner_id !== expectedOwner) return { status: "not_owned" };
-      }
-      for (const resource of unique) {
-        this.ctx.storage.sql.exec(
-          "DELETE FROM locks WHERE hash = ? AND repository_id = ? AND branch_id = ?",
-          resource.hash,
-          repository,
-          resource.branch,
-        );
-      }
-      if (actor !== expectedOwner) {
-        this.ctx.storage.sql.exec(
-          "INSERT INTO lock_recovery_audit(event_id, actor_id, expected_owner_id, repository_id, resources_json, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
-          crypto.randomUUID(),
-          actor,
-          expectedOwner,
-          repository,
-          JSON.stringify(unique),
-          now,
-        );
-      }
-      return { status: "ok", resources: unique };
+      const result = this.releaseComparedResources(
+        expectedOwner,
+        true,
+        repository,
+        resources,
+      );
+      if (result.status !== "ok") return result;
+      this.ctx.storage.sql.exec(
+        "INSERT INTO lock_recovery_audit(event_id, actor_id, expected_owner_id, repository_id, resources_json, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
+        crypto.randomUUID(),
+        actor,
+        expectedOwner,
+        repository,
+        JSON.stringify(result.resources ?? []),
+        now,
+      );
+      return result;
     });
   }
 
@@ -162,10 +181,10 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
   public checkLocksStatus(
     repository: string,
     resources: readonly LockResourceDto[],
-    now: number,
-    leaseDurationMs: number,
+    now?: number,
+    leaseDurationMs?: number,
   ): LockDataDto[] {
-    this.deleteExpired(now, leaseDurationMs);
+    this.deleteExpiredIfEnabled(now, leaseDurationMs);
     return deduplicate(resources).flatMap((resource) => {
       const row = this.get(repository, resource);
       return row === undefined ? [] : [lockFromRow(row)];
@@ -174,10 +193,10 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
 
   public queryLocks(
     query: LockQueryDto,
-    now: number,
-    leaseDurationMs: number,
+    now?: number,
+    leaseDurationMs?: number,
   ): LockDataDto[] {
-    this.deleteExpired(now, leaseDurationMs);
+    this.deleteExpiredIfEnabled(now, leaseDurationMs);
     const [where, parameters] = querySql(query);
     return this.ctx.storage.sql
       .exec<LockRow>(
@@ -204,11 +223,50 @@ export class LockCoordinator extends DurableObject<Cloudflare.Env> {
   }
 
   private deleteExpired(now: number, leaseDurationMs: number): void {
+    if (!Number.isFinite(leaseDurationMs) || leaseDurationMs <= 0) {
+      throw new Error("lock lease duration must be a positive finite number");
+    }
     const expiresBefore = now - leaseDurationMs;
     this.ctx.storage.sql.exec(
       "DELETE FROM locks WHERE locked_at <= ?",
       expiresBefore,
     );
+  }
+
+  private deleteExpiredIfEnabled(
+    now?: number,
+    leaseDurationMs?: number,
+  ): void {
+    if (now === undefined && leaseDurationMs === undefined) return;
+    if (now === undefined || leaseDurationMs === undefined) {
+      throw new Error("lock lease timestamp and duration must be supplied together");
+    }
+    this.deleteExpired(now, leaseDurationMs);
+  }
+
+  private releaseComparedResources(
+    expectedOwner: string,
+    validateOwner: boolean,
+    repository: string,
+    resources: readonly LockResourceDto[],
+  ): LockMutationResult {
+    const unique = deduplicate(resources);
+    for (const resource of unique) {
+      const existing = this.get(repository, resource);
+      if (existing === undefined) return { status: "not_found" };
+      if (validateOwner && existing.owner_id !== expectedOwner) {
+        return { status: "not_owned" };
+      }
+    }
+    for (const resource of unique) {
+      this.ctx.storage.sql.exec(
+        "DELETE FROM locks WHERE hash = ? AND repository_id = ? AND branch_id = ?",
+        resource.hash,
+        repository,
+        resource.branch,
+      );
+    }
+    return { status: "ok", resources: unique };
   }
 
   private queryRecoveryAuditRows(

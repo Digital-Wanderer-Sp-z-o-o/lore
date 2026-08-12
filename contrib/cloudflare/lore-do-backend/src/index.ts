@@ -7,6 +7,7 @@ import type {
   LockRecoveryAuditCursorDto,
   LockQueryDto,
   LockResourceDto,
+  ObliterationAuditCursorDto,
 } from "./contracts";
 import { ImmutableMetadataShard } from "./immutable";
 import { LockCoordinator } from "./locks";
@@ -14,6 +15,7 @@ import { MutablePartitionStore } from "./mutable";
 import {
   ValidationError,
   address,
+  boolField,
   boundedArray,
   context,
   fragment,
@@ -43,6 +45,8 @@ export default {
         capabilities: {
           lockRecoveryAudit: "v1",
           lockRecoveryOwnerCas: true,
+          obliterationAudit: "v1",
+          resumableObliteration: true,
         },
       });
     }
@@ -194,6 +198,64 @@ async function route(
       await immutableStub(env, targetHash).finishObliteration(targetHash);
       return Response.json({ ok: true });
     }
+    case "/v1/immutable/begin-audited-obliteration": {
+      const partition = context(input.partition, "partition");
+      const target = address(input.address);
+      return Response.json(
+        await immutableStub(env, target.hash).beginAuditedObliteration({
+          partition,
+          address: target,
+          actor: boundedStringField(input, "actor", 256),
+          correlationId: boundedStringField(input, "correlationId", 128),
+          recordedAt: Date.now(),
+        }),
+      );
+    }
+    case "/v1/immutable/remove-audited-association": {
+      const partition = context(input.partition, "partition");
+      const target = address(input.address);
+      return Response.json(
+        await immutableStub(env, target.hash).removeAuditedAssociation(
+          uuidField(input, "eventId"),
+          partition,
+          target,
+        ),
+      );
+    }
+    case "/v1/immutable/complete-retained-audited-obliteration": {
+      const partition = context(input.partition, "partition");
+      const target = address(input.address);
+      await immutableStub(env, target.hash).completeRetainedAuditedObliteration(
+        uuidField(input, "eventId"),
+        partition,
+        target,
+        Date.now(),
+      );
+      return Response.json({ ok: true });
+    }
+    case "/v1/immutable/finish-audited-obliteration": {
+      const partition = context(input.partition, "partition");
+      const target = address(input.address);
+      await immutableStub(env, target.hash).finishAuditedObliteration(
+        uuidField(input, "eventId"),
+        partition,
+        target,
+        Date.now(),
+      );
+      return Response.json({ ok: true });
+    }
+    case "/v1/immutable/obliteration-audit": {
+      const repository = context(input.repository, "repository");
+      const target = address(input.address);
+      return Response.json(
+        await immutableStub(env, target.hash).queryObliterationAudit(
+          repository,
+          target,
+          auditPageLimit(input),
+          obliterationAuditCursor(input.cursor),
+        ),
+      );
+    }
     case "/v1/immutable/association-count": {
       const targetHash = hash(input.hash);
       return Response.json({
@@ -252,14 +314,36 @@ async function route(
     case "/v1/locks/release": {
       const resources = lockResources(input.resources, maxBatch);
       const repository = context(input.repository, "repository");
-      const result = await lockStub(env, repository).unlockResources(
-        stringField(input, "actor"),
-        stringField(input, "expectedOwner"),
-        repository,
-        resources,
-        Date.now(),
-        lockLeaseDurationMs(env),
-      );
+      const request = lockReleaseRequest(input);
+      const stub = lockStub(env, repository);
+      const now = Date.now();
+      const leaseDurationMs = lockLeaseDurationMs(env);
+      const result = request.kind === "legacy"
+        ? await legacyLockRelease(
+            stub,
+            request,
+            repository,
+            resources,
+            now,
+            leaseDurationMs,
+          )
+        : request.actor === request.expectedOwner
+          ? await stub.unlockResources(
+              request.actor,
+              true,
+              repository,
+              resources,
+              now,
+              leaseDurationMs,
+            )
+          : await stub.recoverResources(
+              request.actor,
+              request.expectedOwner,
+              repository,
+              resources,
+              now,
+              leaseDurationMs,
+            );
       return lockMutationResponse(result);
     }
     case "/v1/locks/status": {
@@ -496,23 +580,112 @@ function auditPageLimit(input: Record<string, unknown>): number {
   return limit;
 }
 
+type LockReleaseRequest =
+  | {
+      readonly kind: "legacy";
+      readonly owner: string;
+      readonly validateUser: boolean;
+    }
+  | {
+      readonly kind: "owner-cas";
+      readonly actor: string;
+      readonly expectedOwner: string;
+    };
+
+function lockReleaseRequest(input: Record<string, unknown>): LockReleaseRequest {
+  const hasLegacyFields = input.owner !== undefined || input.validateUser !== undefined;
+  const hasOwnerCasFields =
+    input.actor !== undefined || input.expectedOwner !== undefined;
+  if (hasLegacyFields === hasOwnerCasFields) {
+    throw new ValidationError(
+      "lock release requires exactly one legacy or owner-CAS identity shape",
+    );
+  }
+  return hasLegacyFields
+    ? {
+        kind: "legacy",
+        owner: stringField(input, "owner"),
+        validateUser: boolField(input, "validateUser"),
+      }
+    : {
+        kind: "owner-cas",
+        actor: stringField(input, "actor"),
+        expectedOwner: stringField(input, "expectedOwner"),
+      };
+}
+
+async function legacyLockRelease(
+  stub: DurableObjectStub<LockCoordinator>,
+  request: Extract<LockReleaseRequest, { readonly kind: "legacy" }>,
+  repository: string,
+  resources: readonly LockResourceDto[],
+  now: number,
+  leaseDurationMs: number,
+) {
+  console.warn(
+    JSON.stringify({
+      event: "lore_legacy_lock_release",
+      validateUser: request.validateUser,
+    }),
+  );
+  return stub.unlockResources(
+    request.owner,
+    request.validateUser,
+    repository,
+    resources,
+    now,
+    leaseDurationMs,
+  );
+}
+
+function boundedStringField(
+  input: Record<string, unknown>,
+  name: string,
+  maxLength: number,
+): string {
+  const value = stringField(input, name);
+  if (value.length === 0 || value.length > maxLength) {
+    throw new ValidationError(`${name} must contain between 1 and ${maxLength} characters`);
+  }
+  return value;
+}
+
+function uuidField(input: Record<string, unknown>, name: string): string {
+  const value = stringField(input, name);
+  if (!isUuid(value)) throw new ValidationError(`${name} must be a UUID`);
+  return value;
+}
+
+function obliterationAuditCursor(
+  value: unknown,
+): ObliterationAuditCursorDto | undefined {
+  if (value === undefined || value === null) return undefined;
+  const cursor = record(value, "cursor");
+  return {
+    recordedAt: uintField(cursor, "recordedAt"),
+    eventId: uuidField(cursor, "eventId"),
+  };
+}
+
 function lockRecoveryAuditCursor(
   value: unknown,
 ): LockRecoveryAuditCursorDto | undefined {
   if (value === undefined || value === null) return undefined;
   const cursor = record(value, "cursor");
   const eventId = stringField(cursor, "eventId");
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[4-7][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-      eventId,
-    )
-  ) {
+  if (!isUuid(eventId)) {
     throw new ValidationError("cursor eventId must be a UUID");
   }
   return {
     recordedAt: uintField(cursor, "recordedAt"),
     eventId,
   };
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[4-7][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+    value,
+  );
 }
 
 function lockMutationResponse(result: {

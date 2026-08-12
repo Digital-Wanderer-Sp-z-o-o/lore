@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "check": "wrangler types && tsc --noEmit",
-    "preflight:staging": "npm run check && npm test && wrangler versions upload --env staging --minify --strict --dry-run --outdir dist-do-dry-run",
+    "preflight:staging": "npm run check && npm test && npm audit --audit-level=high && wrangler versions upload --env staging --minify --strict --dry-run --outdir dist-do-dry-run",
     "smoke:staging": "node scripts/smoke-staging.js",
     "test": "vitest run",
     "types": "wrangler types",
@@ -17,5 +17,8 @@
     "typescript": "5.9.3",
     "vitest": "4.1.10",
     "wrangler": "4.116.0"
+  },
+  "overrides": {
+    "undici": "7.29.0"
   }
 }

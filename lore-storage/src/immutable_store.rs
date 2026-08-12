@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use lore_base::types::ObliterationAuditPage;
+use lore_base::types::ObliterationAuditQuery;
 use lore_error_set::prelude::*;
 
 use crate::Address;
@@ -349,6 +351,19 @@ pub trait ImmutableStore: Any + Send + Sync {
         address: Address,
         stats: Arc<StoreObliterateStats>,
     ) -> Result<(), StoreError>;
+
+    /// Query the durable administrative obliteration history for one exact address.
+    async fn query_obliteration_audit(
+        self: Arc<Self>,
+        _partition: Partition,
+        _address: Address,
+        _query: &ObliterationAuditQuery,
+    ) -> Result<ObliterationAuditPage, StoreError> {
+        Err(NotSupported {
+            operation: "query obliteration audit".into(),
+        }
+        .into())
+    }
 
     /// Evict fragments from the store until the given max capacity is reached.
     /// When `sync_data` is true, data is synced to the storage media (fsync).

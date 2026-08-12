@@ -1170,6 +1170,18 @@ impl ImmutableStore for CompositeStore {
             .await
     }
 
+    async fn query_obliteration_audit(
+        self: Arc<Self>,
+        repository: Partition,
+        address: Address,
+        query: &lore_base::types::ObliterationAuditQuery,
+    ) -> Result<lore_base::types::ObliterationAuditPage, StoreError> {
+        self.durable
+            .store()
+            .query_obliteration_audit(repository, address, query)
+            .await
+    }
+
     async fn evict(
         self: Arc<Self>,
         max_capacity: usize,

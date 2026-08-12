@@ -21,6 +21,7 @@ use tracing::instrument;
 use tracing::warn;
 
 use super::handlers::obliterate;
+use super::handlers::obliteration_audit;
 use super::timeout_grpc;
 use crate::auth::jwt::JwtVerifier;
 use crate::hooks::HookDispatcher;
@@ -128,6 +129,17 @@ impl AdminService for LoreAdminService {
                 &self.hook_dispatcher,
                 &self.jwt_verifier,
             ),
+        )
+        .await
+    }
+
+    async fn query_obliteration_audit(
+        &self,
+        request: Request<lore_proto::rpc::QueryObliterationAuditRequest>,
+    ) -> Result<Response<lore_proto::rpc::QueryObliterationAuditResponse>, Status> {
+        timeout_grpc(
+            self.rpc_timeout,
+            obliteration_audit::handler(request, self.immutable_store.clone(), &self.jwt_verifier),
         )
         .await
     }

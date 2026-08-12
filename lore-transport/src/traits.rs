@@ -335,6 +335,13 @@ pub trait Repository: Send + Sync {
 pub trait Admin: Send + Sync {
     /// Obliterate the payloads and fragments for an address
     async fn obliterate(&self, address: Address) -> Result<(), ProtocolError>;
+
+    /// Query the durable administrative obliteration history for one exact address.
+    async fn query_obliteration_audit(
+        &self,
+        address: Address,
+        query: &ObliterationAuditQuery,
+    ) -> Result<ObliterationAuditPage, ProtocolError>;
 }
 
 /// Lock protocol

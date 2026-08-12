@@ -959,6 +959,28 @@ impl Admin for GRPCAdmin {
             }
         }
     }
+
+    async fn query_obliteration_audit(
+        &self,
+        address: Address,
+        query: &ObliterationAuditQuery,
+    ) -> Result<ObliterationAuditPage, ProtocolError> {
+        let reconnect_id = self.connection.reconnect.load(Ordering::Relaxed);
+        loop {
+            let result = self
+                .client
+                .read()
+                .await
+                .query_obliteration_audit(address, query)
+                .await;
+            match result {
+                Err(ProtocolError::Disconnected(_)) => {
+                    self.reconnect(reconnect_id).await?;
+                }
+                result => return result,
+            }
+        }
+    }
 }
 
 /// Storage protocol implementation over gRPC

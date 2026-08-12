@@ -102,9 +102,10 @@ The Git-derived image tag and OCI revision label make the running server
 verifiable and leave an explicit rollback target. After the first bootstrap,
 all updates must follow the separate
 [Cloudflare and Hetzner staging rollout runbook](../cloudflare/STAGING_ROLLOUT.md),
-including the zero-traffic Worker version, signed version-override smoke, and
-parallel server canary on ports `42337`/`42339`. Do not replace the running
-container directly from an untagged local build.
+including the zero-traffic Worker version, signed rolling-compatibility smoke,
+post-promotion audit smoke, and parallel server canary on ports
+`42337`/`42339`. Do not replace the running container directly from an untagged
+local build.
 
 After startup, log in with a Rendermoon API key (or omit the token options for the browser handoff):
 

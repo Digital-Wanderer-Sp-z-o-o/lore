@@ -19,6 +19,34 @@ export interface QueryResultDto {
   readonly fragment?: FragmentDto;
 }
 
+export type ObliterationAuditStatus =
+  | "association_pending"
+  | "association_removed"
+  | "payload_retained"
+  | "payload_obliterated";
+
+export interface ObliterationAuditDto {
+  readonly eventId: string;
+  readonly actor: string;
+  readonly correlationId: string;
+  readonly repository: string;
+  readonly address: AddressDto;
+  readonly status: ObliterationAuditStatus;
+  readonly remainingAssociations?: number;
+  readonly recordedAt: number;
+  readonly completedAt?: number;
+}
+
+export interface ObliterationAuditCursorDto {
+  readonly recordedAt: number;
+  readonly eventId: string;
+}
+
+export interface ObliterationAuditPageDto {
+  readonly events: readonly ObliterationAuditDto[];
+  readonly nextCursor?: ObliterationAuditCursorDto;
+}
+
 export interface LockResourceDto {
   readonly branch: string;
   readonly hash: string;
