@@ -121,7 +121,7 @@ fn audit_page(
         .into_iter()
         .map(|event| {
             let event_id = uuid::Uuid::from_slice(&event.event_id)
-                .map_err(|_| invalid_audit_response("event ID was not a UUID"))?;
+                .map_err(|_uuid_error| invalid_audit_response("event ID was not a UUID"))?;
             let address = event
                 .address
                 .map(Address::from)
@@ -160,7 +160,7 @@ fn audit_page(
         .next_cursor
         .map(|cursor| -> Result<ObliterationAuditCursor, ProtocolError> {
             let event_id = uuid::Uuid::from_slice(&cursor.event_id)
-                .map_err(|_| invalid_audit_response("cursor event ID was not a UUID"))?;
+                .map_err(|_uuid_error| invalid_audit_response("cursor event ID was not a UUID"))?;
             Ok(ObliterationAuditCursor::new(
                 event_id,
                 timestamp_millis(cursor.recorded_at.as_ref(), "cursor")?,
