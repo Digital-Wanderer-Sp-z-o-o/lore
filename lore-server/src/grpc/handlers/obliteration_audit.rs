@@ -97,8 +97,9 @@ fn audit_query(
 ) -> Result<ObliterationAuditQuery, Status> {
     let cursor = cursor
         .map(|cursor| -> Result<ObliterationAuditCursor, Status> {
-            let event_id = uuid::Uuid::from_slice(&cursor.event_id)
-                .map_err(|_| Status::invalid_argument("audit cursor event ID must be a UUID"))?;
+            let event_id = uuid::Uuid::from_slice(&cursor.event_id).map_err(|_uuid_error| {
+                Status::invalid_argument("audit cursor event ID must be a UUID")
+            })?;
             Ok(ObliterationAuditCursor::new(
                 event_id,
                 timestamp_millis(cursor.recorded_at.as_ref(), "audit cursor")?,

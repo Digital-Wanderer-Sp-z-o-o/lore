@@ -689,7 +689,7 @@ fn obliteration_audit_page(
                 ));
             }
             let event_id = uuid::Uuid::try_parse(&event.event_id)
-                .map_err(|_| invalid_obliteration_audit("event ID was not a UUID"))?;
+                .map_err(|_uuid_error| invalid_obliteration_audit("event ID was not a UUID"))?;
             ObliterationAuditEntry::try_new(ObliterationAuditEntryData {
                 event_id,
                 actor_id: event.actor,
@@ -716,7 +716,7 @@ fn obliteration_audit_page(
         .map(|cursor| {
             uuid::Uuid::try_parse(&cursor.event_id)
                 .map(|event_id| ObliterationAuditCursor::new(event_id, cursor.recorded_at))
-                .map_err(|_| invalid_obliteration_audit("cursor event ID was not a UUID"))
+                .map_err(|_uuid_error| invalid_obliteration_audit("cursor event ID was not a UUID"))
         })
         .transpose()?;
     if let Some(cursor) = next_cursor.as_ref() {
