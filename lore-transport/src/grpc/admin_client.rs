@@ -5,20 +5,21 @@ use std::sync::atomic::AtomicU64;
 
 use lore_base::lore_debug;
 use lore_base::types::Address;
+use lore_base::types::ObliterationAuditCursor;
+use lore_base::types::ObliterationAuditEntry;
+use lore_base::types::ObliterationAuditEntryData;
+use lore_base::types::ObliterationAuditPage;
+use lore_base::types::ObliterationAuditQuery;
+use lore_base::types::ObliterationAuditStatus;
 use lore_base::types::RepositoryId;
-use lore_base::types::{
-    ObliterationAuditCursor, ObliterationAuditEntry, ObliterationAuditEntryData,
-    ObliterationAuditPage, ObliterationAuditQuery, ObliterationAuditStatus,
-};
 use lore_proto::AdminServiceClient;
 use lore_proto::ObliterateRequest;
+use lore_proto::rpc::ObliterationAuditCursor as ObliterationAuditCursorProto;
 #[cfg(test)]
 use lore_proto::rpc::ObliterationAuditEntry as ObliterationAuditEntryProto;
-use lore_proto::rpc::{
-    ObliterationAuditCursor as ObliterationAuditCursorProto,
-    ObliterationAuditStatus as ObliterationAuditStatusProto, QueryObliterationAuditRequest,
-    QueryObliterationAuditResponse,
-};
+use lore_proto::rpc::ObliterationAuditStatus as ObliterationAuditStatusProto;
+use lore_proto::rpc::QueryObliterationAuditRequest;
+use lore_proto::rpc::QueryObliterationAuditResponse;
 
 use super::AuthorizedService;
 use super::AuthzInterceptor;

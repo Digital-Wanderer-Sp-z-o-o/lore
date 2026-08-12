@@ -3,24 +3,30 @@
 use std::sync::Arc;
 
 use lore_base::runtime::LORE_CONTEXT;
-use lore_base::types::{
-    Address, ObliterationAuditCursor, ObliterationAuditEntry, ObliterationAuditQuery,
-    ObliterationAuditStatus,
-};
-use lore_proto::rpc::{
-    ObliterationAuditCursor as ObliterationAuditCursorProto,
-    ObliterationAuditEntry as ObliterationAuditEntryProto,
-    ObliterationAuditStatus as ObliterationAuditStatusProto, QueryObliterationAuditRequest,
-    QueryObliterationAuditResponse,
-};
+use lore_base::types::Address;
+use lore_base::types::ObliterationAuditCursor;
+use lore_base::types::ObliterationAuditEntry;
+use lore_base::types::ObliterationAuditQuery;
+use lore_base::types::ObliterationAuditStatus;
+use lore_proto::rpc::ObliterationAuditCursor as ObliterationAuditCursorProto;
+use lore_proto::rpc::ObliterationAuditEntry as ObliterationAuditEntryProto;
+use lore_proto::rpc::ObliterationAuditStatus as ObliterationAuditStatusProto;
+use lore_proto::rpc::QueryObliterationAuditRequest;
+use lore_proto::rpc::QueryObliterationAuditResponse;
 use lore_storage::StoreError;
+use tonic::Request;
+use tonic::Response;
+use tonic::Status;
 use tonic::metadata::MetadataMap;
-use tonic::{Request, Response, Status};
 use tracing::warn;
 
-use crate::auth::jwt::{AuthorizationToken, JwtVerifier};
+use crate::auth::jwt::AuthorizationToken;
+use crate::auth::jwt::JwtVerifier;
 use crate::auth::jwt_interceptor::extract_bearer_token;
-use crate::grpc::{extract_correlation_id, get_repository, get_user_id, is_owner_or_admin};
+use crate::grpc::extract_correlation_id;
+use crate::grpc::get_repository;
+use crate::grpc::get_user_id;
+use crate::grpc::is_owner_or_admin;
 use crate::util::setup_execution;
 
 async fn authenticate_request(

@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use lore_base::types::ObliterationAuditPage;
+use lore_base::types::ObliterationAuditQuery;
 use lore_error_set::prelude::*;
 
 use crate::Address;
@@ -30,7 +32,6 @@ use crate::errors::SlowDown;
 use crate::store_types::StoreMatch;
 use crate::store_types::StoreObliterateStats;
 use crate::store_types::StoreQueryResult;
-use lore_base::types::{ObliterationAuditPage, ObliterationAuditQuery};
 
 #[error_set(clone)]
 pub enum StoreError {

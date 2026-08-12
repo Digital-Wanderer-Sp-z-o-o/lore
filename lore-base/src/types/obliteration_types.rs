@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 use uuid::Uuid;
 
-use super::{Address, RepositoryId};
+use super::Address;
+use super::RepositoryId;
 use crate::error::InvalidArguments;
 
 pub const OBLITERATION_AUDIT_MAX_PAGE_SIZE: u32 = 100;
