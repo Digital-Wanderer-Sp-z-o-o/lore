@@ -772,8 +772,9 @@ pub async fn connect(
         .max_concurrent_bidi_streams(STREAM_COUNT.into());
 
     validate_liveness(transport.idle_timeout, transport.keep_alive_interval)?;
-    let idle_timeout = IdleTimeout::try_from(transport.idle_timeout)
-        .map_err(|_| ProtocolError::internal("QUIC idle timeout exceeds protocol maximum"))?;
+    let idle_timeout = IdleTimeout::try_from(transport.idle_timeout).map_err(|_range_error| {
+        ProtocolError::internal("QUIC idle timeout exceeds protocol maximum")
+    })?;
     transport_config
         .max_idle_timeout(Some(idle_timeout))
         .keep_alive_interval(Some(transport.keep_alive_interval));

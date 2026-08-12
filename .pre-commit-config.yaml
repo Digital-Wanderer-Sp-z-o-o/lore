@@ -60,7 +60,7 @@ repos:
     rev: v2.2.4
     hooks:
       - id: codespell
-        args: [ "-L", "ue,crate,numer,ser,ratatui,ect,noes,keep-alives,hastable", "-S", "Cargo.*,package-lock.json,vendor/*" ]
+        args: [ "-L", "ue,crate,numer,ser,ratatui,ect,noes,keep-alives,hastable", "-S", "Cargo.*,*/package-lock.json,vendor/*" ]
         exclude: ^docs/developing/doc-standards/tools/vale/styles/
 
   - repo: https://github.com/rhysd/actionlint

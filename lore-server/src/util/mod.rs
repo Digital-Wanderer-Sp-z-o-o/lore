@@ -4,9 +4,8 @@
 pub mod cert_metrics;
 mod socket_address;
 
-pub(crate) use socket_address::resolve_socket_address;
-
 use lore_revision::interface::LoreGlobalArgs;
+pub(crate) use socket_address::resolve_socket_address;
 
 use crate::auth::jwt::AuthorizationToken;
 use crate::auth::jwt::ResourcePermission;

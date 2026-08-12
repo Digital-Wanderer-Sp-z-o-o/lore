@@ -4,13 +4,22 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lore_base::error::{AddressNotFound, NotAuthenticated, SlowDown};
-use lore_storage::store_types::{KeyType, KeyValueStream};
-use lore_storage::{Address, Hash, MutableStore, Partition, StoreError};
+use lore_base::error::AddressNotFound;
+use lore_base::error::NotAuthenticated;
+use lore_base::error::SlowDown;
+use lore_storage::Address;
+use lore_storage::Hash;
+use lore_storage::MutableStore;
+use lore_storage::Partition;
+use lore_storage::StoreError;
+use lore_storage::store_types::KeyType;
+use lore_storage::store_types::KeyValueStream;
 use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::{CloudflareClient, CloudflareClientError};
+use crate::CloudflareClient;
+use crate::CloudflareClientError;
 
 pub struct CloudflareMutableStore {
     client: CloudflareClient,

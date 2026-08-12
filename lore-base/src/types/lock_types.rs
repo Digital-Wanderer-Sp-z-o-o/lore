@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Epic Games, Inc.
 // SPDX-License-Identifier: MIT
+use uuid::Uuid;
+
 use super::BranchId;
 use super::Hash;
 use crate::error::InvalidArguments;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 /// Descriptor of a resource that can be locked

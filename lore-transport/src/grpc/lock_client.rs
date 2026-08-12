@@ -219,7 +219,7 @@ fn recovery_audit_page(
         .into_iter()
         .map(|event| {
             let event_id = Uuid::from_slice(&event.event_id)
-                .map_err(|_| invalid_audit_response("event ID was not a UUID"))?;
+                .map_err(|_uuid_error| invalid_audit_response("event ID was not a UUID"))?;
             LockRecoveryAuditEntry::try_new(
                 event_id,
                 event.actor,
@@ -234,7 +234,7 @@ fn recovery_audit_page(
         .next_cursor
         .map(|cursor| -> Result<LockRecoveryAuditCursor, ProtocolError> {
             let event_id = Uuid::from_slice(&cursor.event_id)
-                .map_err(|_| invalid_audit_response("cursor event ID was not a UUID"))?;
+                .map_err(|_uuid_error| invalid_audit_response("cursor event ID was not a UUID"))?;
             Ok(LockRecoveryAuditCursor::new(
                 event_id,
                 timestamp_millis(cursor.recorded_at.as_ref(), "cursor")?,
@@ -262,8 +262,9 @@ fn timestamp_millis(
             "{field} timestamp was invalid"
         )));
     }
-    let seconds = u64::try_from(timestamp.seconds)
-        .map_err(|_| invalid_audit_response(&format!("{field} timestamp was invalid")))?;
+    let seconds = u64::try_from(timestamp.seconds).map_err(|_range_error| {
+        invalid_audit_response(&format!("{field} timestamp was invalid"))
+    })?;
     seconds
         .checked_mul(1_000)
         .and_then(|value| value.checked_add(timestamp.nanos as u64 / 1_000_000))

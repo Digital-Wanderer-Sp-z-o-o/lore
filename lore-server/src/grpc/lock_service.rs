@@ -577,7 +577,8 @@ mod test {
     use tonic::Code;
     use tonic::Request;
 
-    use crate::grpc::lock_service::{LoreLockService, resolve_expected_unlock_owner};
+    use crate::grpc::lock_service::LoreLockService;
+    use crate::grpc::lock_service::resolve_expected_unlock_owner;
 
     fn authorize<T>(
         request: &mut Request<T>,
@@ -585,7 +586,8 @@ mod test {
         user_id: &str,
         permissions: &[&str],
     ) {
-        use crate::auth::jwt::{AuthorizationToken, ResourcePermission};
+        use crate::auth::jwt::AuthorizationToken;
+        use crate::auth::jwt::ResourcePermission;
 
         request.metadata_mut().insert_bin(
             REPOSITORY_ID_KEY,

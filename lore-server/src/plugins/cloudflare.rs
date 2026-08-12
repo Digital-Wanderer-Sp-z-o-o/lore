@@ -6,18 +6,22 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lore_base::error::{PluginConfigError, PluginInitError};
-use lore_cloudflare::{
-    CloudflareClient, CloudflareImmutableStore, CloudflareLockStore, CloudflareMutableStore,
-};
+use lore_base::error::PluginConfigError;
+use lore_base::error::PluginInitError;
+use lore_cloudflare::CloudflareClient;
+use lore_cloudflare::CloudflareImmutableStore;
+use lore_cloudflare::CloudflareLockStore;
+use lore_cloudflare::CloudflareMutableStore;
 use lore_revision::lock::LockStore;
-use lore_storage::{ImmutableStore, MutableStore};
+use lore_storage::ImmutableStore;
+use lore_storage::MutableStore;
 use serde::Deserialize;
 
-use crate::plugins::{
-    ImmutableStorePluginFactory, LockStorePluginFactory, MutableStorePluginFactory, PluginError,
-    PluginRegistry,
-};
+use crate::plugins::ImmutableStorePluginFactory;
+use crate::plugins::LockStorePluginFactory;
+use crate::plugins::MutableStorePluginFactory;
+use crate::plugins::PluginError;
+use crate::plugins::PluginRegistry;
 
 const PLUGIN_NAME: &str = "cloudflare";
 const DEFAULT_SECRET_ENV: &str = "LORE_CLOUDFLARE_SHARED_SECRET";

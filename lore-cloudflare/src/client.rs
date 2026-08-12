@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: MIT
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bytes::Bytes;
-use reqwest::{Method, StatusCode};
-use ring::{digest, hmac};
+use reqwest::Method;
+use reqwest::StatusCode;
+use ring::digest;
+use ring::hmac;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use thiserror::Error;

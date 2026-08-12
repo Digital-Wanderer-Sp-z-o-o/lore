@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: MIT
 use std::sync::Arc;
 
-use lore_base::types::{LockRecoveryAuditCursor, LockRecoveryAuditQuery};
+use lore_base::types::LockRecoveryAuditCursor;
+use lore_base::types::LockRecoveryAuditQuery;
 use lore_error_set::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::errors::*;
 use crate::event;
 use crate::event::EventError;
-use crate::interface::{LoreError, LoreString};
+use crate::interface::LoreError;
+use crate::interface::LoreString;
 use crate::repository::RepositoryContext;
 
 #[derive(Clone, Debug)]

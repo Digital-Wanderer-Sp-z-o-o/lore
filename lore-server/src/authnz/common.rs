@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MIT
 use tonic::Request;
 use tonic::Status;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::Channel;
+use tonic::transport::ClientTlsConfig;
+use tonic::transport::Endpoint;
 
 use crate::grpc::ServerResultExt;
 
@@ -74,7 +76,8 @@ pub fn create_request_with_authorization<T>(
 mod tests {
     use anyhow::Error;
 
-    use super::{auth_transport_url, create_request_with_authorization};
+    use super::auth_transport_url;
+    use super::create_request_with_authorization;
 
     #[test]
     fn custom_auth_scheme_uses_https_transport() {
