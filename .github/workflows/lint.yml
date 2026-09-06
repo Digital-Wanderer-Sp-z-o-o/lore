@@ -63,3 +63,8 @@ jobs:
 
       - name: Run pre-commit
         run: pre-commit run --all-files --show-diff-on-failure --color=always
+
+      - name: Verify CLI JSON completion contract
+        run: |
+          cargo build --locked -p lore-client --bin lore
+          LORE_TEST_BINARY="$PWD/target/debug/lore" python scripts/verify_revision_json_completion.py -v

@@ -584,8 +584,8 @@ pub fn handle_revision_history(globals: LoreGlobalArgs, args: &RevisionHistoryAr
     let list_result =
         runtime().block_on(revision::history(globals.clone(), list_args, callback)) as u8;
 
-    // If the revision list returned an error then don't bother resolving usernames
-    if list_result != 0 {
+    // JSON is complete; name resolution and descriptions are human output only.
+    if list_result != 0 || config().json {
         return list_result;
     }
 
@@ -712,8 +712,8 @@ pub fn handle_revision_info(globals: LoreGlobalArgs, args: &RevisionInfoArgs) ->
     let info_result =
         runtime().block_on(revision::info(globals.clone(), info_args, callback)) as u8;
 
-    // If the revision info returned an error then don't bother resolving usernames
-    if info_result != 0 {
+    // JSON is complete; name resolution and descriptions are human output only.
+    if info_result != 0 || config().json {
         return info_result;
     }
 
@@ -1339,6 +1339,12 @@ pub fn handle_revision_commit(globals: LoreGlobalArgs, args: &RevisionCommitArgs
     let commit_result =
         runtime().block_on(revision::commit(globals.clone(), commit_args, callback)) as u8;
 
+    // JSON already contains the operation's terminal event. Display-name
+    // enrichment is only for human output, not another top-level operation.
+    if config().json {
+        return commit_result;
+    }
+
     // If the revision commit returned an error then don't bother resolving usernames
     if commit_result != 0 {
         println!("{}Commit failed{}", CommonStyles::FAILURE, anstyle::Reset);
@@ -1405,6 +1411,10 @@ pub fn handle_revision_amend(globals: LoreGlobalArgs, args: &RevisionAmendArgs) 
 
     let amend_result =
         runtime().block_on(revision::amend(globals.clone(), amend_args, callback)) as u8;
+
+    if config().json {
+        return amend_result;
+    }
 
     // If the revision amend returned an error then don't bother resolving usernames
     if amend_result != 0 {
